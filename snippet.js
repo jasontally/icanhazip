@@ -6,7 +6,12 @@
 //   https://ip.jasontally.com/whoami      ->  HTML page with every field
 //   https://ip.jasontally.com/?whoami     ->  same page
 //   https://ip.jasontally.com/?anything   ->  "<visitor ip>\n"
+//   https://city.jasontally.com/          ->  the visitor city
+//   https://colo.jasontally.com/          ->  the Cloudflare data centre
 //   any other hostname                    ->  not run (snippet rule)
+//
+// Every subdomain in HOSTS is in the one Snippet rule. A rule expression can
+// hold 4096 characters, which is about 160 hosts, so they all fit together.
 //
 // "whoami" must be the whole query string. "?whoami=0" counts as another
 // query string, so it gets the plain IP.
@@ -46,6 +51,18 @@ const table = (rows) =>
 		.join("")}</table>`;
 
 const section = (title, body) => `<h2>${escapeHtml(title)}</h2>${body}`;
+
+// Same headers as icanhazip.com, so scripts see the same result.
+// no-store is the one addition: it keeps an address out of the edge cache.
+const plain = (value) =>
+	new Response(`${value}\n`, {
+		headers: {
+			"content-type": "text/plain",
+			"cache-control": "no-store",
+			"access-control-allow-origin": "*",
+			"access-control-allow-methods": "GET",
+		},
+	});
 
 // Leaflet is 45 KB, over the 32 KB Snippet limit, so it loads from a CDN.
 // SRI pins the exact bytes. Loading it makes this page contact unpkg.com and
@@ -186,25 +203,85 @@ ${section("All request.cf", `<pre>${escapeHtml(JSON.stringify(cf, null, 2))}</pr
 `;
 };
 
+// One subdomain per data point. Each key is the host label, and the value
+// reads that field out of the request. Any host in this map answers with the
+// value and nothing else.
+//
+// A host may hold more than one field name. The first one that holds a value
+// wins, so "region" can offer the long name and fall back to the code.
+const HOSTS = {
+	ip: ["CF-Connecting-IP"],
+	city: ["city"],
+	zip: ["postalCode"],
+	postal: ["postalCode"],
+	country: ["country"],
+	co: ["country"],
+	region: ["region", "regionCode"],
+	continent: ["continent"],
+	timezone: ["timezone"],
+	tz: ["timezone"],
+	lat: ["latitude"],
+	lon: ["longitude"],
+	colo: ["colo"],
+	edge: ["colo"],
+	asn: ["asn"],
+	as: ["asOrganization"],
+	isp: ["asOrganization"],
+	http: ["httpProtocol"],
+	tls: ["tlsVersion"],
+	cipher: ["tlsCipher"],
+	rtt: ["clientTcpRtt"],
+	bot: ["botManagement.score"],
+	metro: ["metroCode"],
+	eu: ["isEUCountry"],
+	ray: ["cf-ray"],
+};
+
+// These two live in request headers, not in request.cf. Everything else in
+// HOSTS is a request.cf path, where "." means "step into".
+const HEADER_FIELDS = new Set(["CF-Connecting-IP", "cf-ray"]);
+
+// "colo" -> the value for the colo host, or null when Cloudflare sent none.
+const readHost = (label, request) => {
+	for (const name of HOSTS[label] ?? []) {
+		if (HEADER_FIELDS.has(name)) {
+			const header = request.headers.get(name.toLowerCase());
+			if (header !== null) return header;
+			continue;
+		}
+		const value = name
+			.split(".")
+			.reduce((node, part) => (node == null ? undefined : node[part]), request.cf);
+		if (value !== undefined && value !== null && value !== "") {
+			return typeof value === "boolean" ? (value ? "true" : "false") : String(value);
+		}
+	}
+	return null;
+};
+
+// Labels for the host map, joined for the Snippet rule expression.
+// deploy.sh writes this into the rule, so the rule and the map cannot drift.
+export const hostLabels = Object.keys(HOSTS);
+
 export default {
 	async fetch(request) {
 		const url = new URL(request.url);
 		const ip = request.headers.get("CF-Connecting-IP") ?? request.cf?.ip ?? "unknown";
+		const label = url.hostname.split(".")[0];
 
 		const wantsPage =
 			url.pathname === "/whoami" || url.searchParams.get("whoami") === "";
 
+		// A subdomain answers with one value, so shell scripts can read it.
+		// The details page wins over the value, so /whoami still works there.
+		// The zone check keeps an unrelated host such as city.example.com out.
+		if (!wantsPage && url.hostname.endsWith(".jasontally.com") && label in HOSTS && label !== "ip") {
+			const value = readHost(label, request);
+			if (value !== null) return plain(value);
+		}
+
 		if (!wantsPage) {
-			// Same headers as icanhazip.com, so scripts see the same result.
-			// no-store is the one addition: it keeps an address out of edge cache.
-			return new Response(`${ip}\n`, {
-				headers: {
-					"content-type": "text/plain",
-					"cache-control": "no-store",
-					"access-control-allow-origin": "*",
-					"access-control-allow-methods": "GET",
-				},
-			});
+			return plain(ip);
 		}
 
 		return new Response(detailsPage(request, ip), {

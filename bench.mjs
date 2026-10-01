@@ -6,7 +6,7 @@
 
 import { setTimeout as sleep } from "node:timers/promises";
 
-import snippet from "./snippet.js";
+import snippet, { hostLabels } from "./snippet.js";
 
 const ORIGIN = "https://icanhazip.com";
 
@@ -74,6 +74,29 @@ console.log("\npaths that must answer with the plain address");
 		check(shape, `${path} is an address and a newline only`,
 			livePath.equals(mine.body) ? "same shape as icanhazip.com" : "same shape, different address");
 		await sleep(150);
+	}
+}
+
+console.log("\nsubdomains, checked against the live site");
+{
+	for (const label of hostLabels) {
+		if (label === "ip") continue;
+		let live;
+		try {
+			live = await fetch(`https://${label}.jasontally.com/`, {
+				headers: { "user-agent": "icanhazip-bench/1.0" },
+			});
+		} catch (error) {
+			check(false, `${label}.jasontally.com`, `request failed: ${error.message}`);
+			continue;
+		}
+		const body = await live.text();
+		const clean = /^[\x20-\x7e]+\n$/.test(body) && body.trim().length > 0;
+		check(
+			live.status === 200 && live.headers.get("content-type") === "text/plain" && clean,
+			`${label}.jasontally.com`,
+			`${live.status} ${JSON.stringify(body.trim())}`,
+		);
 	}
 }
 

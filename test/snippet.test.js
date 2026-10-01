@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import snippet from "../snippet.js";
+import snippet, { hostLabels } from "../snippet.js";
 
 const CF = {
 	city: "Austin",
@@ -162,6 +162,101 @@ test("hostile coordinates cannot break out of the script block", async () => {
 	assert.match(script, /circleMarker\(\[NaN, -97\.7\]/);
 	// The popup label is built from those numbers, so it cannot carry the text.
 	assert.match(script, /\.bindPopup\("NaN, -97\.7"\)/);
+});
+
+const callHost = async (host, options) => call(`https://${host}.jasontally.com/`, options);
+
+test("each subdomain answers with only that one value", async () => {
+	const expected = {
+		ip: "203.0.113.7",
+		city: "Austin",
+		zip: "78701",
+		postal: "78701",
+		country: "US",
+		co: "US",
+		region: "Texas",
+		continent: "NA",
+		timezone: "America/Chicago",
+		tz: "America/Chicago",
+		lat: "30.2672",
+		lon: "-97.7431",
+		colo: "DFW",
+		edge: "DFW",
+		asn: "13335",
+		as: "CLOUDFLARENET",
+		isp: "CLOUDFLARENET",
+		http: "HTTP/2",
+		tls: "TLSv1.3",
+		cipher: "AEAD-AES128-GCM-SHA256",
+		rtt: "12",
+		metro: "635",
+	};
+
+	for (const [host, value] of Object.entries(expected)) {
+		const response = await callHost(host);
+		assert.equal(response.headers.get("content-type"), "text/plain", host);
+		assert.equal(await response.text(), `${value}\n`, host);
+	}
+});
+
+test("ray comes from the cf-ray header", async () => {
+	const response = await callHost("ray", {
+		headers: { "CF-Connecting-IP": "203.0.113.7", "CF-Ray": "8a1b2c3d4e5f6789-DFW" },
+	});
+	assert.equal(await response.text(), "8a1b2c3d4e5f6789-DFW\n");
+});
+
+test("bot and eu read nested and boolean values", async () => {
+	assert.equal(await (await callHost("bot")).text(), "1\n");
+
+	const euNo = await callHost("eu", { cf: { ...CF, isEUCountry: false } });
+	assert.equal(await euNo.text(), "false\n");
+
+	const euYes = await callHost("eu", { cf: { ...CF, isEUCountry: true } });
+	assert.equal(await euYes.text(), "true\n");
+});
+
+test("region falls back to the region code when the long name is missing", async () => {
+	const withName = await callHost("region", { cf: { ...CF, region: "Texas", regionCode: "TX" } });
+	assert.equal(await withName.text(), "Texas\n");
+
+	const codeOnly = await callHost("region", { cf: { ...CF, region: undefined, regionCode: "TX" } });
+	assert.equal(await codeOnly.text(), "TX\n");
+});
+
+test("a subdomain with no data still answers with a line, not the page", async () => {
+	const response = await callHost("city", { cf: {} });
+	const body = await response.text();
+
+	assert.equal(response.headers.get("content-type"), "text/plain");
+	assert.doesNotMatch(body, /DOCTYPE/);
+});
+
+test("a subdomain keeps the whoami page for /whoami", async () => {
+	const response = await call("https://colo.jasontally.com/whoami");
+	assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+});
+
+test("an unknown subdomain is not in the map and falls back to the IP", async () => {
+	const response = await callHost("nosuchfield");
+	assert.equal(await response.text(), "203.0.113.7\n");
+});
+
+test("a host outside jasontally.com is left to the rule, not handled here", async () => {
+	const request = new Request("https://city.example.com/");
+	request.cf = CF;
+	const response = await snippet.fetch(request);
+	assert.equal(await response.text(), "203.0.113.7\n");
+});
+
+test("hostLabels lists every host in the map, for the Snippet rule", () => {
+	// These labels are what deploy.sh writes into the Snippet rule. A host
+	// missing here has DNS but never runs.
+	assert.deepEqual([...hostLabels].sort(), [
+		"as", "asn", "bot", "cipher", "city", "co", "colo", "continent",
+		"country", "edge", "eu", "http", "ip", "isp", "lat", "lon", "metro",
+		"postal", "ray", "region", "rtt", "timezone", "tls", "tz", "zip",
+	]);
 });
 
 test("the IP comes from CF-Connecting-IP and falls back to request.cf", async () => {

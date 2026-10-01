@@ -17,7 +17,99 @@ $ curl https://ip.jasontally.com/
 | `https://ip.jasontally.com/anything?x=1` | the same plain IP address        |
 | `https://ip.jasontally.com/?whoami` | an HTML page with every known field  |
 | `https://ip.jasontally.com/whoami` | the same HTML page                |
+| `https://city.jasontally.com/` | one data point about the visitor            |
 | any other hostname            | not run, the snippet rule does not match    |
+
+## One data point per subdomain
+
+Every subdomain answers with one value and nothing else, so a shell script can
+read it.
+
+```console
+$ curl https://city.jasontally.com/
+Melbourne
+$ echo "You appear to be in $(curl -s https://city.jasontally.com/)"
+You appear to be in Melbourne
+```
+
+| Subdomain | Value | Cloudflare field |
+| --- | --- | --- |
+| `ip` | IP address | `CF-Connecting-IP` |
+| `city` | City | `city` |
+| `zip`, `postal` | Postal code | `postalCode` |
+| `country`, `co` | Country code | `country` |
+| `region` | Region, or the code | `region`, then `regionCode` |
+| `continent` | Continent code | `continent` |
+| `timezone`, `tz` | IANA time zone | `timezone` |
+| `lat`, `lon` | Coordinates | `latitude`, `longitude` |
+| `colo`, `edge` | Data centre code | `colo` |
+| `asn` | Autonomous system number | `asn` |
+| `as`, `isp` | Autonomous system name | `asOrganization` |
+| `http` | Protocol | `httpProtocol` |
+| `tls` | TLS version | `tlsVersion` |
+| `cipher` | TLS cipher | `tlsCipher` |
+| `rtt` | Client RTT in ms | `clientTcpRtt` |
+| `bot` | Bot score, 1 to 99 | `botManagement.score` |
+| `metro` | Metro code | `metroCode` |
+| `eu` | `true` or `false` | `isEUCountry` |
+| `ray` | Cloudflare Ray ID | `cf-ray` header |
+
+`/whoami` on any of these hosts still gives the HTML page, so you can read one
+value or read everything.
+
+The values are approximate. Cloudflare derives them from the network, not from
+a GPS fix, so `city` can be the city centre and `zip` can be the wrong one.
+
+`request.cf` carries 59 fields. These 25 cover the ones with a name people ask
+for. The rest are TLS fingerprints, certificate details and internal edge
+values. They have no common name, so no subdomain holds them.
+
+### One Snippet, one rule
+
+All 25 hosts share one Snippet and one rule. The rule is a set test:
+
+```
+(http.host in {"ip.jasontally.com" "city.jasontally.com" ...})
+```
+
+A rule expression holds at most 4096 characters. The current rule is 566, so
+there is room for about 160 hosts before a second Snippet is needed.
+`deploy.sh` measures the expression and stops if it would pass the limit.
+
+`deploy.sh` reads the host list out of `snippet.js`, so the DNS records, the
+rule, and the code that answers can never disagree.
+
+### What limits this, and which one binds first
+
+Snippets have three limits. Two are comfortable. One is the ceiling.
+
+| Limit | Now | Allowed | Used |
+| --- | --- | --- | --- |
+| Source size | 10651 bytes | 32768 | 32% |
+| Rule expression | 566 chars | 4096 | 14% |
+| Execution time | 0.03 ms | 5 ms | 0.6% |
+
+**The rule expression is the limit that binds.** A rule may hold 4096 characters
+and each host costs about 21, so one Snippet reaches roughly 190 hosts. The
+source would fit about 1000 more, and execution time does not grow at all,
+because the handler looks up one key in an object instead of walking a list.
+
+`deploy.sh` measures the expression before it sends anything and stops if it
+would pass 4096. At that point the fix is a second Snippet with the overflow
+hosts, not a bigger one.
+
+Execution time stays low because there are no subrequests and no `fetch()`. The
+whole handler builds a string and returns it.
+
+```console
+$ npm run bench:cost
+colo.jasontally.com   median 0.0300 ms   0.60% of the 5 ms budget
+```
+
+A wildcard rule would remove the 4096 character limit, but it is not usable
+here. `http.host matches` needs a Business plan, and `http.host contains
+"jasontally.com"` was accepted by the API yet stopped the Snippet from running
+at all. The explicit set of hostnames stays.
 
 The plain response is `text/plain`, holds the IP address from
 `CF-Connecting-IP`, ends in a newline, and carries `Cache-Control: no-store`,
@@ -43,8 +135,9 @@ npm i -g cf
 read -rs -p "Cloudflare API token: " CF && CLOUDFLARE_API_TOKEN="$CF" ./deploy.sh
 ```
 
-`deploy.sh` creates the DNS record if it is missing, uploads `snippet.js`,
-and puts the rule in place. It is safe to run again.
+`deploy.sh` reads the host list out of `snippet.js`, creates any missing DNS
+records, uploads the code, and puts the rule in place. It is safe to run again,
+and it will not touch other Snippet rules in the zone.
 
 `cf auth login` also works. It stores a credential in your keyring and needs
 no token in the environment.
@@ -64,13 +157,13 @@ Scope it to Zone `jasontally.com` only. Account `74036ee9a61ce6ac5682b2eade8dfb8
 holds the zone. Snippets are zone scoped, so the account ID is not used by the
 Snippets API itself.
 
-### The DNS record
+### The DNS records
 
 Snippets run before the origin and this Snippet never calls `fetch()`, so no
-origin is contacted. A proxied record for `ip.jasontally.com` must still
-exist, because Snippets only run on requests that reach the Cloudflare edge.
-The record is an AAAA to `100::1`, from the RFC 6666 IPv6 discard prefix, which
-is never routable.
+origin is contacted. A proxied record for each host must still exist, because
+Snippets only run on requests that reach the Cloudflare edge. Each record is an
+AAAA to `100::1`, from the RFC 6666 IPv6 discard prefix, which is never
+routable.
 
 ### Known ceiling
 
@@ -130,4 +223,5 @@ network and no edge. Measure the real end to end time after deploy.
 | `snippet.js`          | the Snippet, the only file Cloudflare runs |
 | `deploy.sh`           | DNS, code and rule deployment through `cf` |
 | `bench.mjs`           | byte and header check against icanhazip.com |
+| `cost.mjs`            | measures size, rule size and execution time |
 | `test/snippet.test.js`| checks for both response shapes            |

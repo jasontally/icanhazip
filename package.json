@@ -11,6 +11,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "bench": "node bench.mjs"
+    "bench": "node bench.mjs",
+    "bench:cost": "node cost.mjs"
   }
 }
