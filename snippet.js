@@ -68,6 +68,9 @@ const plain = (value) =>
 // Leaflet is 45 KB, over the 32 KB Snippet limit, so it loads from a CDN.
 // SRI pins the exact bytes. Loading it makes this page contact unpkg.com and
 // tile.openstreetmap.org, so the page is no longer private to the visitor.
+const LEAFLET = `<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>`;
+
 const map = (latitude, longitude) => {
 	// Coordinates come from Cloudflare, but they go inside a script block, so
 	// keep them to plain numbers and nothing else.
@@ -75,8 +78,7 @@ const map = (latitude, longitude) => {
 	const lon = String(Number(longitude));
 	return `<div id="map" role="img" aria-label="Map at ${escapeHtml(latitude)}, ${escapeHtml(longitude)}"></div>
 <p class="note">Loading a map sends this visit to unpkg.com and tile.openstreetmap.org. <a href="#" id="no-map">Hide the map</a> and stop that.</p>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+${LEAFLET}
 <script>
   window.addEventListener("load", function () {
     var where = L.map("map", { scrollWheelZoom: false }).setView([${lat}, ${lon}], 5);
@@ -94,6 +96,70 @@ const map = (latitude, longitude) => {
     });
   });
 </script>`;
+};
+
+// map.jasontally.com is nothing but the map, filling the viewport. It is the
+// one host that answers with a page instead of a single value.
+const mapPage = (request) => {
+	const cf = request.cf ?? {};
+	if (cf.latitude == null || cf.longitude == null) {
+		return `<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>No location</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:1rem}
+</style>
+<p>Cloudflare sent no coordinates for your address, so there is nothing to map.</p>
+<p><a href="https://ip.jasontally.com/whoami">See what Cloudflare did send</a></p>
+</html>`;
+	}
+
+	// The same Number() guard as the details page, so a coordinate that is not
+	// a number cannot break out of the script block.
+	const lat = String(Number(cf.latitude));
+	const lon = String(Number(cf.longitude));
+
+	return `<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>${escapeHtml(lat)}, ${escapeHtml(lon)}</title>
+<style>
+:root{color-scheme:light dark}
+html,body{height:100%;margin:0}
+body{font:14px/1.4 system-ui,sans-serif}
+#map{height:100%;width:100%;background:#ddd}
+.note{position:absolute;z-index:1000;left:.5rem;bottom:.5rem;margin:0;padding:.35rem .6rem;border-radius:.25rem;background:rgba(0,0,0,.72);color:#fff;max-width:min(30rem,calc(100vw - 1rem))}
+.note a{color:#cfe3ff}
+</style>
+<div id="map" role="img" aria-label="Map at ${escapeHtml(lat)}, ${escapeHtml(lon)}"></div>
+<p class="note">Approximate, from your network not a GPS fix. Tiles from
+<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>,
+code from unpkg.com. <a href="#" id="no-map">Stop loading them</a>.</p>
+${LEAFLET}
+<script>
+  window.addEventListener("load", function () {
+    var where = L.map("map").setView([${lat}, ${lon}], 6);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(where);
+    L.circleMarker([${lat}, ${lon}], { radius: 10, color: "#2563eb", fillOpacity: 0.6 })
+      .addTo(where)
+      .bindPopup(${JSON.stringify(`${lat}, ${lon}`)});
+    document.getElementById("no-map").addEventListener("click", function (event) {
+      event.preventDefault();
+      where.remove();
+      document.getElementById("map").remove();
+      document.querySelector(".note").remove();
+    });
+  });
+</script>
+</html>`;
 };
 
 const detailsPage = (request, ip) => {
@@ -282,7 +348,11 @@ const DERIVED = {
 	utc: () => new Date().toISOString(),
 	ver: (request) => (ipOf(request).includes(":") ? "6" : "4"),
 	ip4: (request) => (ipOf(request).includes(":") ? "" : ipOf(request)),
+	ipv4: (request) => (ipOf(request).includes(":") ? "" : ipOf(request)),
+	v4: (request) => (ipOf(request).includes(":") ? "" : ipOf(request)),
 	ip6: (request) => (ipOf(request).includes(":") ? ipOf(request) : ""),
+	ipv6: (request) => (ipOf(request).includes(":") ? ipOf(request) : ""),
+	v6: (request) => (ipOf(request).includes(":") ? ipOf(request) : ""),
 	// These four ask a DNS resolver over the network. Each one costs a
 	// subrequest, and a Pro zone allows 2 per request.
 	ptr: async (request) => (await resolve(reverseName(ipOf(request)), "PTR"))[0] ?? "",
@@ -298,6 +368,64 @@ const DERIVED = {
 		const back = await resolve(name, ip.includes(":") ? "AAAA" : "A");
 		return back.includes(ip) ? name : "";
 	},
+	// The address block, which Cloudflare does not report. asn and as come
+	// from the routing registry. These come from the address registry.
+	net: async (request) => (await whois(ipOf(request))).NetName ?? "",
+	netname: async (request) => (await whois(ipOf(request))).NetName ?? "",
+	netblock: async (request) => (await whois(ipOf(request))).NetRange ?? "",
+	range: (request) => whois(ipOf(request)).then((w) => w.NetRange ?? ""),
+	cidr: async (request) => (await whois(ipOf(request))).CIDR ?? "",
+	// The block the network actually announces in BGP, which can be tighter
+	// than the allocation.
+	prefix: (request) => announcedPrefix(ipOf(request)),
+	bgp: (request) => announcedPrefix(ipOf(request)),
+};
+
+// RIPE RIS WHOIS, free and keyless, covers all five registries. It answers
+// with the allocation that holds the address: its name, range and CIDR.
+//
+// CEILING: rdap.org would be the tidier source, since RDAP is the successor to
+// WHOIS, but it answers 403 to Cloudflare's own network. Calling a RIR
+// directly needs the IANA bootstrap file to know which one, and Snippets
+// cannot cache it. RIPE RIS needs no lookup and no key, so it goes last.
+const whois = async (ip) => {
+	if (!ip) return {};
+	try {
+		const response = await fetch(
+			`https://stat.ripe.net/data/whois/data.json?resource=${encodeURIComponent(ip)}`,
+			{ headers: { accept: "application/json" } },
+		);
+		if (!response.ok) return {};
+		const records = (await response.json()).data?.records;
+		const first = Array.isArray(records) ? records[0] : null;
+		if (!Array.isArray(first)) return {};
+		const fields = {};
+		for (const field of first) {
+			if (typeof field.key === "string" && typeof field.value === "string") {
+				fields[field.key] = field.value;
+			}
+		}
+		return fields;
+	} catch {
+		return {};
+	}
+};
+
+// RIPE RIS routing history, free and keyless. Returns the announced prefix,
+// which is usually the same block but can be tighter than the allocation.
+const announcedPrefix = async (ip) => {
+	if (!ip) return "";
+	try {
+		const response = await fetch(
+			`https://stat.ripe.net/data/network-info/data.json?resource=${encodeURIComponent(ip)}`,
+			{ headers: { accept: "application/json" } },
+		);
+		if (!response.ok) return "";
+		const prefix = (await response.json()).data?.prefix;
+		return typeof prefix === "string" ? prefix : "";
+	} catch {
+		return "";
+	}
 };
 
 // DNS over HTTPS, using Cloudflare's own resolver so no third party sees the
@@ -306,12 +434,18 @@ const DOH = "https://cloudflare-dns.com/dns-query";
 
 const resolve = async (name, type) => {
 	if (!name) return [];
-	const url = `${DOH}?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
-	const response = await fetch(url, { headers: { accept: "application/dns-json" } });
-	if (!response.ok) return [];
-	const answers = (await response.json()).Answer;
-	if (!Array.isArray(answers)) return [];
-	return answers.filter((a) => a.type === typeNumber(type)).map((a) => String(a.data).replace(/\.$/, ""));
+	try {
+		const url = `${DOH}?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
+		const response = await fetch(url, { headers: { accept: "application/dns-json" } });
+		if (!response.ok) return [];
+		const answers = (await response.json()).Answer;
+		if (!Array.isArray(answers)) return [];
+		return answers
+			.filter((a) => a.type === typeNumber(type))
+			.map((a) => String(a.data).replace(/\.$/, ""));
+	} catch {
+		return [];
+	}
 };
 
 const TYPE_NUMBERS = { PTR: 12, A: 1, AAAA: 28, NS: 2 };
@@ -364,23 +498,44 @@ const readHost = async (label, request) => {
 	return null;
 };
 
+// Hosts that answer with a whole page instead of a single value.
+const PAGES = { map: mapPage };
+
 // Labels for the host maps, joined for the Snippet rule expression.
 // deploy.sh writes this into the rule, so the rule and the map cannot drift.
-export const hostLabels = [...Object.keys(HOSTS), ...Object.keys(DERIVED)];
+export const hostLabels = [
+	...Object.keys(HOSTS),
+	...Object.keys(DERIVED),
+	...Object.keys(PAGES),
+];
+
+const page = (body) =>
+	new Response(body, {
+		headers: {
+			"content-type": "text/html; charset=utf-8",
+			"cache-control": "no-store",
+		},
+	});
 
 export default {
 	async fetch(request) {
 		const url = new URL(request.url);
 		const ip = request.headers.get("CF-Connecting-IP") ?? request.cf?.ip ?? "unknown";
 		const label = url.hostname.split(".")[0];
+		const inZone = url.hostname.endsWith(".jasontally.com");
 
 		const wantsPage =
 			url.pathname === "/whoami" || url.searchParams.get("whoami") === "";
 
+		// /whoami always gives the details page, on every host.
+		if (wantsPage) return page(detailsPage(request, ip));
+
+		// These hosts answer with a page, not a value.
+		if (inZone && label in PAGES) return page(PAGES[label](request));
+
 		// A subdomain answers with one value, so shell scripts can read it.
-		// The details page wins over the value, so /whoami still works there.
 		// The zone check keeps an unrelated host such as city.example.com out.
-		if (!wantsPage && url.hostname.endsWith(".jasontally.com") && hostLabels.includes(label) && label !== "ip") {
+		if (inZone && hostLabels.includes(label) && label !== "ip") {
 			// A known host with no data answers with an empty line. It must not
 			// fall through to the IP address, or a missing field would look
 			// like a result. curl sends no Accept-Language, so lang is often
@@ -388,15 +543,6 @@ export default {
 			return plain((await readHost(label, request)) ?? "");
 		}
 
-		if (!wantsPage) {
-			return plain(ip);
-		}
-
-		return new Response(detailsPage(request, ip), {
-			headers: {
-				"content-type": "text/html; charset=utf-8",
-				"cache-control": "no-store",
-			},
-		});
+		return plain(ip);
 	},
 };

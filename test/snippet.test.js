@@ -151,7 +151,60 @@ test("hostile coordinates cannot break out of the script block", async () => {
 		})
 	).text();
 
-	test("the reverse DNS name builders handle both address families", async () => {
+	test("ipv4, ipv6, v4 and v6 are synonyms of ip4 and ip6", async () => {
+	const v4 = { headers: { "CF-Connecting-IP": "203.0.113.7" } };
+	for (const host of ["ip4", "ipv4", "v4"]) {
+		assert.equal(await (await callHost(host, v4)).text(), "203.0.113.7\n", host);
+	}
+	for (const host of ["ip6", "ipv6", "v6"]) {
+		assert.equal(await (await callHost(host, v4)).text(), "\n", host);
+	}
+
+	const v6 = { headers: { "CF-Connecting-IP": "2001:db8::1" } };
+	for (const host of ["ip6", "ipv6", "v6"]) {
+		assert.equal(await (await callHost(host, v6)).text(), "2001:db8::1\n", host);
+	}
+	for (const host of ["ip4", "ipv4", "v4"]) {
+		assert.equal(await (await callHost(host, v6)).text(), "\n", host);
+	}
+});
+
+test("map.jasontally.com is the whole map, not a value", async () => {
+	const response = await callHost("map");
+	const body = await response.text();
+
+	assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+	// No table, no details. The map is the page.
+	assert.doesNotMatch(body, /All request headers/);
+	assert.doesNotMatch(body, /Cloudflare colo/);
+	assert.match(body, /<div id="map"/);
+	assert.match(body, /#map\{height:100%;width:100%/);
+	assert.match(body, /setView\(\[30\.2672, -97\.7431\], 6\)/);
+	assert.match(body, /tile\.openstreetmap\.org/);
+	assert.match(body, /leaflet\.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2\/Z9VM\+kNiyxNV1lvTlZBo="/);
+});
+
+test("map says so when Cloudflare sent no coordinates", async () => {
+	const body = await (
+		await callHost("map", { cf: { ...CF, latitude: undefined, longitude: undefined } })
+	).text();
+
+	assert.match(body, /no coordinates/i);
+	assert.doesNotMatch(body, /<div id="map"/, "an empty map is worse than an explanation");
+	assert.match(body, /ip\.jasontally\.com\/whoami/);
+});
+
+test("map coordinates cannot break out of the script block", async () => {
+	const body = await (
+		await callHost("map", { cf: { ...CF, latitude: "30.2);alert(1);//" } })
+	).text();
+
+	const script = body.slice(body.lastIndexOf("<script>"), body.lastIndexOf("</script>"));
+	assert.doesNotMatch(script, /alert\(1\)/);
+	assert.match(script, /setView\(\[NaN, -97\.7431\], 6\)/);
+});
+
+test("the reverse DNS name builders handle both address families", async () => {
 	// ptr and friends must build a name the resolver understands. These
 	// queries hit the live Cloudflare resolver, so they prove the format.
 	const cases = [
@@ -283,13 +336,14 @@ test("hostLabels lists every host in the maps, for the Snippet rule", () => {
 	// missing here has DNS but never runs.
 	// Sorted here so a missing host shows up as a clear diff, not a count.
 assert.deepEqual([...hostLabels].sort(), [
-	"as", "asn", "bot", "cc", "cipher", "city", "co", "colo", "continent",
-	"country", "countrycode", "dns", "dma", "edge", "eu", "geo", "hostname",
-	"http", "ip", "ip4", "ip6", "isp", "ja3", "ja4", "lang", "lat",
-	"latitude", "latlng", "latlon", "latlong", "lon", "longitude", "metro",
-	"ns", "nameserver", "org", "postcode", "postal", "proto", "province",
-	"ptr", "ray", "region", "rtt", "st", "state", "timezone", "tls", "tz",
-	"ua", "useragent", "utc", "ver", "zip", "zipcode",
+	"as", "asn", "bgp", "bot", "cc", "cipher", "city", "co", "colo",
+	"continent", "country", "countrycode", "dns", "dma", "edge", "eu", "geo",
+	"hostname", "http", "ip", "ip4", "ip6", "ipv4", "ipv6", "isp", "ja3",
+	"ja4", "lang", "lat", "latitude", "latlng", "latlon", "latlong", "lon",
+	"longitude", "map", "metro", "nameserver", "net", "netblock", "netname",
+	"ns", "org", "postcode", "postal", "prefix", "proto", "province", "ptr",
+	"range", "ray", "cidr", "region", "rtt", "st", "state", "timezone", "tls",
+	"tz", "ua", "useragent", "utc", "v4", "v6", "ver", "zip", "zipcode",
 ].sort());
 });
 
@@ -360,6 +414,24 @@ test("ptr, hostname, ns, nameserver and dns are wired to a resolver", async () =
 	for (const host of ["ptr", "hostname", "ns", "nameserver", "dns"]) {
 		assert.ok(hostLabels.includes(host), `${host} must be in the rule`);
 	}
+});
+
+test("the registry hosts exist and never throw", async () => {
+	// stat.ripe.net is a third party, so these must fail soft. An empty answer
+	// is correct when a service is slow or down.
+	for (const host of ["net", "netname", "netblock", "range", "cidr", "prefix", "bgp"]) {
+		assert.ok(hostLabels.includes(host), `${host} must be in the rule`);
+		const body = await (await callHost(host)).text();
+		assert.match(body, /^[\x20-\x7e]*\n$/, `${host} must answer one printable line`);
+	}
+});
+
+test("an empty or missing address never reaches a third party", async () => {
+	// readHost must not call out for a request with no address.
+	const request = new Request("https://net.jasontally.com/");
+	request.cf = {};
+	const response = await snippet.fetch(request);
+	assert.equal(await response.text(), "\n");
 });
 
 test("the new shorthands read the right fields", async () => {

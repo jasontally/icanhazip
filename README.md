@@ -59,13 +59,18 @@ You appear to be in Melbourne
 | `lang` | Accepted languages | `Accept-Language` header |
 | `ja3`, `ja4` | TLS fingerprints | `tlsJa3Hash`, `tlsJa4` |
 | `ver` | `4` or `6` | computed |
-| `ip4` | The address, only for IPv4 | computed |
-| `ip6` | The address, only for IPv6 | computed |
+| `ip4`, `ipv4`, `v4` | The address, only for IPv4 | computed |
+| `ip6`, `ipv6`, `v6` | The address, only for IPv6 | computed |
 | `ptr`, `hostname` | Reverse DNS name | DNS lookup |
 | `ns`, `nameserver` | Nameservers for the address block | DNS lookup |
 | `dns` | Forward confirmed name | two DNS lookups |
+| `net`, `netname` | Name of the allocation | WHOIS |
+| `netblock`, `range` | Allocated range | WHOIS |
+| `cidr` | Allocated CIDR | WHOIS |
+| `prefix`, `bgp` | Announced prefix | BGP route |
+| `map` | The map on its own page | page, not a value |
 
-55 hosts in all. A few of them are often empty, and they answer with an empty
+67 hosts in all. A few of them are often empty, and they answer with an empty
 line rather than the IP address. `curl` sends no `Accept-Language`, so `lang`
 is empty for most shell use. Cloudflare sends `ja3` and `ja4` only for some
 requests. `ip4` and `ip6` are one or the other, never both.
@@ -109,26 +114,71 @@ trip.
 | `ns`, `nameserver` | 1 |
 | `dns` | 2 |
 
+The WHOIS and BGP hosts below also cost one subrequest each.
+
 `/whoami` on any of these hosts still gives the HTML page, so you can read one
 value or read everything.
+
+### The address block
+
+Cloudflare reports `asn` and `as`, which come from the routing registry. The
+address block comes from the address registry instead, and is different data.
+
+```console
+$ curl https://as.jasontally.com/          # from Cloudflare, the ASN owner
+Charter Communications, Inc
+$ curl https://net.jasontally.com/         # from WHOIS, the allocation name
+BHN
+$ curl https://netblock.jasontally.com/
+50.88.0.0 - 50.91.255.255
+$ curl https://cidr.jasontally.com/
+50.88.0.0/14
+$ curl https://prefix.jasontally.com/      # what the network announces
+50.88.0.0/15
+```
+
+Note that `cidr` and `prefix` can differ. The allocation is what the registry
+recorded, the prefix is what the network announces in BGP, and the announced
+block is sometimes tighter.
+
+These hosts use RIPE RIS at `stat.ripe.net`, which is free, needs no key, and
+answers for all five registries. RDAP is the tidier source, since it replaces
+WHOIS, but `rdap.org` answers **403 to Cloudflare's own network**. Calling a
+RIR directly needs the IANA bootstrap file to know which one, and a Snippet
+cannot cache that. The ceiling and the upgrade path are in the comment above
+`whois` in `snippet.js`.
+
+### map.jasontally.com
+
+This host is nothing but the map, filling the whole viewport, with the
+coordinates you came from.
+
+```console
+$ curl -o /dev/null -w '%{http_code} %{size_download}\n' https://map.jasontally.com/
+200 1920
+```
+
+It uses the same pinned Leaflet as `/whoami`. If Cloudflare sent no
+coordinates, it says so and links to `/whoami` rather than showing an empty
+map.
 
 The values are approximate. Cloudflare derives them from the network, not from
 a GPS fix, so `city` can be the city centre and `zip` can be the wrong one.
 
-`request.cf` carries 59 fields. These 55 cover the ones with a name people ask
+`request.cf` carries 59 fields. These 67 cover the ones with a name people ask
 for. The rest are TLS handshake transcripts, certificate blobs,
 `tlsExportedAuthenticator`, `edgeL4`, `requestPriority` and
 `verifiedBotCategory`. None has a common name, so no subdomain holds them.
 
 ### One Snippet, one rule
 
-All 55 hosts share one Snippet and one rule. The rule is a set test:
+All 67 hosts share one Snippet and one rule. The rule is a set test:
 
 ```
 (http.host in {"ip.jasontally.com" "city.jasontally.com" ...})
 ```
 
-A rule expression holds at most 4096 characters. The current rule is 1258, so
+A rule expression holds at most 4096 characters. The current rule is 1525, so
 there is room for about 190 hosts before a second Snippet is needed.
 `deploy.sh` measures the expression and stops if it would pass the limit.
 
@@ -141,13 +191,13 @@ Snippets have three limits. Two are comfortable. One is the ceiling.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size | 15074 bytes | 32768 | 46% |
-| Rule expression | 1258 chars | 4096 | 31% |
+| Source size | 20737 bytes | 32768 | 63% |
+| Rule expression | 1525 chars | 4096 | 37% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
 **The rule expression is the limit that binds.** A rule may hold 4096 characters
 and each host costs about 21, so one Snippet reaches roughly 190 hosts. The
-source would fit about 800 more, and execution time does not grow at all,
+source would fit about 550 more, and execution time does not grow at all,
 because the handler looks up one key in an object instead of walking a list.
 
 `deploy.sh` measures the expression before it sends anything and stops if it

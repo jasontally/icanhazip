@@ -88,6 +88,10 @@ console.log("\nsubdomains, checked against the live site");
 		"geo", "latlong", "latitude", "longitude", "ver", "utc", "st",
 	]);
 
+	// These hosts answer with a page, not a single value, so they are checked
+	// for content type and shape instead of for a one line body.
+	const pages = new Set(["map"]);
+
 	for (const label of hostLabels) {
 		if (label === "ip") continue;
 		let live;
@@ -100,6 +104,18 @@ console.log("\nsubdomains, checked against the live site");
 			continue;
 		}
 		const body = await live.text();
+
+		if (pages.has(label)) {
+			check(
+				live.status === 200 &&
+					live.headers.get("content-type") === "text/html; charset=utf-8" &&
+					body.includes("<!DOCTYPE html>"),
+				`${label}.jasontally.com`,
+				`${live.status} ${body.length} bytes of HTML`,
+			);
+			await sleep(100);
+			continue;
+		}
 		const oneLine = /^[\x20-\x7e]*\n$/.test(body);
 		const filled = alwaysPresent.has(label) ? body.trim().length > 0 : true;
 		check(
