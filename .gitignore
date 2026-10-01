@@ -1,0 +1,6 @@
+# Local Cloudflare credentials. Never commit a token.
+.env
+.env.*
+
+# Playwright MCP artifacts
+.playwright-mcp/

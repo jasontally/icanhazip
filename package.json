@@ -1,0 +1,15 @@
+{
+  "name": "icanhazip",
+  "version": "1.0.0",
+  "description": "icanhazip clone as a Cloudflare Snippet for ip.jasontally.com",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasontally/icanhazip.git"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
