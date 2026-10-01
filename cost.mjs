@@ -102,7 +102,7 @@ console.log("\nthe three limits, and which one binds first");
 	const size = fs.statSync(new URL("./snippet.js", import.meta.url)).size;
 
 	console.log(`  source       ${String(size).padStart(6)} / 32768 bytes   ${((size / 32768) * 100).toFixed(1)}% used`);
-	const ruleSize = 566;
+	const ruleSize = 921;
 	console.log(`  rule         ${String(ruleSize).padStart(6)} / 4096 chars    ${((ruleSize / 4096) * 100).toFixed(1)}% used`);
 	const exec = 0.03;
 	console.log(`  execution    ${exec.toFixed(4)} / 5 ms            ${((exec / 5) * 100).toFixed(2)}% used`);

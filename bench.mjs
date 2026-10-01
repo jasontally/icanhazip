@@ -79,6 +79,14 @@ console.log("\npaths that must answer with the plain address");
 
 console.log("\nsubdomains, checked against the live site");
 {
+	// Cloudflare sends these for every proxied request, so they must not be
+	// empty. The rest may legitimately be empty: curl sends no Accept-Language,
+	// and Cloudflare sends no JA3 or JA4 for most requests.
+	const alwaysPresent = new Set([
+		"ip", "city", "zip", "country", "region", "continent", "colo", "asn",
+		"as", "http", "latlong", "utc",
+	]);
+
 	for (const label of hostLabels) {
 		if (label === "ip") continue;
 		let live;
@@ -91,9 +99,13 @@ console.log("\nsubdomains, checked against the live site");
 			continue;
 		}
 		const body = await live.text();
-		const clean = /^[\x20-\x7e]+\n$/.test(body) && body.trim().length > 0;
+		const oneLine = /^[\x20-\x7e]*\n$/.test(body);
+		const filled = alwaysPresent.has(label) ? body.trim().length > 0 : true;
 		check(
-			live.status === 200 && live.headers.get("content-type") === "text/plain" && clean,
+			live.status === 200 &&
+				live.headers.get("content-type") === "text/plain" &&
+				oneLine &&
+				filled,
 			`${label}.jasontally.com`,
 			`${live.status} ${JSON.stringify(body.trim())}`,
 		);

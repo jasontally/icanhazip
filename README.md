@@ -36,23 +36,39 @@ You appear to be in Melbourne
 | --- | --- | --- |
 | `ip` | IP address | `CF-Connecting-IP` |
 | `city` | City | `city` |
-| `zip`, `postal` | Postal code | `postalCode` |
-| `country`, `co` | Country code | `country` |
-| `region` | Region, or the code | `region`, then `regionCode` |
+| `zip`, `zipcode`, `postal`, `postcode` | Postal code | `postalCode` |
+| `country`, `co`, `cc` | Country code | `country` |
+| `region`, `geo`, `st` | Region, or the code | `region`, then `regionCode` |
 | `continent` | Continent code | `continent` |
 | `timezone`, `tz` | IANA time zone | `timezone` |
-| `lat`, `lon` | Coordinates | `latitude`, `longitude` |
+| `lat`, `lon` | One coordinate each | `latitude`, `longitude` |
+| `latlong`, `latlon`, `latlng` | Both coordinates, comma separated | `latitude`, `longitude` |
 | `colo`, `edge` | Data centre code | `colo` |
 | `asn` | Autonomous system number | `asn` |
-| `as`, `isp` | Autonomous system name | `asOrganization` |
-| `http` | Protocol | `httpProtocol` |
+| `as`, `isp`, `org` | Autonomous system name | `asOrganization` |
+| `http`, `proto` | Protocol | `httpProtocol` |
 | `tls` | TLS version | `tlsVersion` |
 | `cipher` | TLS cipher | `tlsCipher` |
 | `rtt` | Client RTT in ms | `clientTcpRtt` |
 | `bot` | Bot score, 1 to 99 | `botManagement.score` |
-| `metro` | Metro code | `metroCode` |
+| `metro`, `dma` | Metro code | `metroCode` |
 | `eu` | `true` or `false` | `isEUCountry` |
 | `ray` | Cloudflare Ray ID | `cf-ray` header |
+| `utc` | Request time, ISO 8601 | computed |
+| `ua` | User agent | `User-Agent` header |
+| `lang` | Accepted languages | `Accept-Language` header |
+| `ja3`, `ja4` | TLS fingerprints | `tlsJa3Hash`, `tlsJa4` |
+
+41 hosts in all. A few of them are often empty, and they answer with an empty
+line rather than the IP address. `curl` sends no `Accept-Language`, so `lang`
+is empty for most shell use. Cloudflare sends `ja3` and `ja4` only for some
+requests.
+
+```console
+$ curl https://lang.jasontally.com/
+$ [ -n "$(curl -s https://lang.jasontally.com/)" ] && echo "browser" || echo "no language sent"
+no language sent
+```
 
 `/whoami` on any of these hosts still gives the HTML page, so you can read one
 value or read everything.
@@ -60,20 +76,21 @@ value or read everything.
 The values are approximate. Cloudflare derives them from the network, not from
 a GPS fix, so `city` can be the city centre and `zip` can be the wrong one.
 
-`request.cf` carries 59 fields. These 25 cover the ones with a name people ask
-for. The rest are TLS fingerprints, certificate details and internal edge
-values. They have no common name, so no subdomain holds them.
+`request.cf` carries 59 fields. These 41 cover the ones with a name people ask
+for. The rest are TLS handshake transcripts, certificate blobs,
+`tlsExportedAuthenticator`, `edgeL4`, `requestPriority` and
+`verifiedBotCategory`. None has a common name, so no subdomain holds them.
 
 ### One Snippet, one rule
 
-All 25 hosts share one Snippet and one rule. The rule is a set test:
+All 41 hosts share one Snippet and one rule. The rule is a set test:
 
 ```
 (http.host in {"ip.jasontally.com" "city.jasontally.com" ...})
 ```
 
-A rule expression holds at most 4096 characters. The current rule is 566, so
-there is room for about 160 hosts before a second Snippet is needed.
+A rule expression holds at most 4096 characters. The current rule is 921, so
+there is room for about 190 hosts before a second Snippet is needed.
 `deploy.sh` measures the expression and stops if it would pass the limit.
 
 `deploy.sh` reads the host list out of `snippet.js`, so the DNS records, the
@@ -85,8 +102,8 @@ Snippets have three limits. Two are comfortable. One is the ceiling.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size | 10651 bytes | 32768 | 32% |
-| Rule expression | 566 chars | 4096 | 14% |
+| Source size | 11901 bytes | 32768 | 36% |
+| Rule expression | 921 chars | 4096 | 23% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
 **The rule expression is the limit that binds.** A rule may hold 4096 characters

@@ -224,12 +224,23 @@ test("region falls back to the region code when the long name is missing", async
 	assert.equal(await codeOnly.text(), "TX\n");
 });
 
-test("a subdomain with no data still answers with a line, not the page", async () => {
+test("a subdomain with no data answers with an empty line, never the IP", async () => {
 	const response = await callHost("city", { cf: {} });
 	const body = await response.text();
 
 	assert.equal(response.headers.get("content-type"), "text/plain");
+	assert.equal(body, "\n", "an empty line, so the caller can test for empty");
 	assert.doesNotMatch(body, /DOCTYPE/);
+});
+
+test("a missing field never looks like the visitor IP", async () => {
+	// curl sends no Accept-Language, and Cloudflare sends no JA3 for most
+	// requests. Both must read as empty, not as the caller's address.
+	for (const host of ["lang", "ja3", "ja4", "tls", "colo"]) {
+		const body = await (await callHost(host, { cf: {} })).text();
+		assert.equal(body, "\n", host);
+		assert.doesNotMatch(body, /203\.0\.113\.7/, host);
+	}
 });
 
 test("a subdomain keeps the whoami page for /whoami", async () => {
@@ -249,14 +260,86 @@ test("a host outside jasontally.com is left to the rule, not handled here", asyn
 	assert.equal(await response.text(), "203.0.113.7\n");
 });
 
-test("hostLabels lists every host in the map, for the Snippet rule", () => {
+test("hostLabels lists every host in the maps, for the Snippet rule", () => {
 	// These labels are what deploy.sh writes into the Snippet rule. A host
 	// missing here has DNS but never runs.
 	assert.deepEqual([...hostLabels].sort(), [
-		"as", "asn", "bot", "cipher", "city", "co", "colo", "continent",
-		"country", "edge", "eu", "http", "ip", "isp", "lat", "lon", "metro",
-		"postal", "ray", "region", "rtt", "timezone", "tls", "tz", "zip",
-	]);
+		"as", "asn", "bot", "cc", "cipher", "city", "co", "colo", "continent",
+		"country", "dma", "edge", "eu", "geo", "http", "ip", "isp", "ja3",
+		"ja4", "lang", "lat", "latlng", "latlon", "latlong", "lon", "metro",
+		"org", "postcode", "postal", "proto", "ray", "region", "rtt", "st",
+		"timezone", "tls", "tz", "ua", "utc", "zip", "zipcode",
+	].sort());
+});
+
+test("latlong joins the two coordinates with a comma", async () => {
+	for (const host of ["latlong", "latlon", "latlng"]) {
+		const response = await callHost(host);
+		assert.equal(await response.text(), "30.2672,-97.7431\n", host);
+	}
+});
+
+test("latlong needs both coordinates, not one", async () => {
+	const noLon = await callHost("latlong", { cf: { ...CF, longitude: undefined } });
+	assert.doesNotMatch(await noLon.text(), /30\.2672/, "half a pair is not a position");
+
+	const neither = await callHost("latlong", { cf: {} });
+	assert.doesNotMatch(await neither.text(), /,/, "no coordinates means no comma");
+});
+
+test("utc returns an ISO 8601 timestamp", async () => {
+	const body = await (await callHost("utc")).text();
+	assert.match(body, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\n$/);
+	assert.ok(Math.abs(Date.parse(body.trim()) - Date.now()) < 60_000);
+});
+
+test("geo, st and region all answer with the region", async () => {
+	for (const host of ["geo", "st", "region"]) {
+		assert.equal(await (await callHost(host)).text(), "Texas\n", host);
+	}
+});
+
+test("the new shorthands read the right fields", async () => {
+	const expected = {
+		cc: "US",
+		zipcode: "78701",
+		postcode: "78701",
+		dma: "635",
+		org: "CLOUDFLARENET",
+		proto: "HTTP/2",
+	};
+	for (const [host, value] of Object.entries(expected)) {
+		assert.equal(await (await callHost(host)).text(), `${value}\n`, host);
+	}
+});
+
+test("ua and lang read request headers", async () => {
+	const response = await callHost("ua", { headers: { "CF-Connecting-IP": "203.0.113.7", "user-agent": "curl/8.5.0" } });
+	assert.equal(await response.text(), "curl/8.5.0\n");
+
+	const lang = await callHost("lang", {
+		headers: { "CF-Connecting-IP": "203.0.113.7", "accept-language": "en-GB,en;q=0.9" },
+	});
+	assert.equal(await lang.text(), "en-GB,en;q=0.9\n");
+});
+
+test("ua is empty when the client sends no user agent", async () => {
+	// Node's Request adds no default user agent, which matches a bare client.
+	assert.equal(await (await callHost("ua")).text(), "\n");
+});
+
+test("ja3 and ja4 read the TLS fingerprints, and are empty when absent", async () => {
+	const withHashes = await callHost("ja3", {
+		cf: { ...CF, tlsJa3Hash: "e7d705a3286e19ea", tlsJa4: "t13d1516h2_8daa" },
+	});
+	assert.equal(await withHashes.text(), "e7d705a3286e19ea\n");
+	assert.equal(await (await callHost("ja4", {
+		cf: { ...CF, tlsJa3Hash: "e7d705a3286e19ea", tlsJa4: "t13d1516h2_8daa" },
+	})).text(), "t13d1516h2_8daa\n");
+
+	// Cloudflare sends no JA3 for most requests, so this host is often empty.
+	const none = await callHost("ja3", { cf: { ...CF, tlsJa3Hash: undefined } });
+	assert.doesNotMatch(await none.text(), /e7d705a3/);
 });
 
 test("the IP comes from CF-Connecting-IP and falls back to request.cf", async () => {

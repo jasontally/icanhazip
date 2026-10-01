@@ -233,35 +233,72 @@ const HOSTS = {
 	rtt: ["clientTcpRtt"],
 	bot: ["botManagement.score"],
 	metro: ["metroCode"],
+	dma: ["metroCode"],
 	eu: ["isEUCountry"],
 	ray: ["cf-ray"],
+	geo: ["region", "regionCode"],
+	st: ["region", "regionCode"],
+	cc: ["country"],
+	zipcode: ["postalCode"],
+	postcode: ["postalCode"],
+	org: ["asOrganization"],
+	proto: ["httpProtocol"],
+	ua: ["User-Agent"],
+	lang: ["Accept-Language"],
+	ja3: ["tlsJa3Hash"],
+	ja4: ["tlsJa4"],
 };
 
-// These two live in request headers, not in request.cf. Everything else in
-// HOSTS is a request.cf path, where "." means "step into".
-const HEADER_FIELDS = new Set(["CF-Connecting-IP", "cf-ray"]);
+// These live in request headers, not in request.cf. Everything else in HOSTS
+// is a request.cf path, where "." means "step into".
+const HEADER_FIELDS = new Set([
+	"CF-Connecting-IP",
+	"cf-ray",
+	"User-Agent",
+	"Accept-Language",
+]);
+
+const readField = (name, request) => {
+	if (HEADER_FIELDS.has(name)) return request.headers.get(name.toLowerCase());
+	return name
+		.split(".")
+		.reduce((node, part) => (node == null ? undefined : node[part]), request.cf);
+};
+
+// These hosts join fields or compute a value, so they do not fit HOSTS.
+// "lat,long" is one string, the order everyone writes on a map.
+const DERIVED = {
+	latlong: (request) => pair(request),
+	latlon: (request) => pair(request),
+	latlng: (request) => pair(request),
+	utc: () => new Date().toISOString(),
+};
+
+const pair = (request) => {
+	const lat = readField("latitude", request);
+	const lon = readField("longitude", request);
+	return lat != null && lon != null ? `${lat},${lon}` : null;
+};
 
 // "colo" -> the value for the colo host, or null when Cloudflare sent none.
 const readHost = (label, request) => {
+	const derived = DERIVED[label];
+	if (derived) {
+		const value = derived(request);
+		return value == null || value === "" ? null : value;
+	}
+
 	for (const name of HOSTS[label] ?? []) {
-		if (HEADER_FIELDS.has(name)) {
-			const header = request.headers.get(name.toLowerCase());
-			if (header !== null) return header;
-			continue;
-		}
-		const value = name
-			.split(".")
-			.reduce((node, part) => (node == null ? undefined : node[part]), request.cf);
-		if (value !== undefined && value !== null && value !== "") {
-			return typeof value === "boolean" ? (value ? "true" : "false") : String(value);
-		}
+		const value = readField(name, request);
+		if (value === undefined || value === null || value === "") continue;
+		return typeof value === "boolean" ? (value ? "true" : "false") : String(value);
 	}
 	return null;
 };
 
-// Labels for the host map, joined for the Snippet rule expression.
+// Labels for the host maps, joined for the Snippet rule expression.
 // deploy.sh writes this into the rule, so the rule and the map cannot drift.
-export const hostLabels = Object.keys(HOSTS);
+export const hostLabels = [...Object.keys(HOSTS), ...Object.keys(DERIVED)];
 
 export default {
 	async fetch(request) {
@@ -275,9 +312,12 @@ export default {
 		// A subdomain answers with one value, so shell scripts can read it.
 		// The details page wins over the value, so /whoami still works there.
 		// The zone check keeps an unrelated host such as city.example.com out.
-		if (!wantsPage && url.hostname.endsWith(".jasontally.com") && label in HOSTS && label !== "ip") {
-			const value = readHost(label, request);
-			if (value !== null) return plain(value);
+		if (!wantsPage && url.hostname.endsWith(".jasontally.com") && hostLabels.includes(label) && label !== "ip") {
+			// A known host with no data answers with an empty line. It must not
+			// fall through to the IP address, or a missing field would look
+			// like a result. curl sends no Accept-Language, so lang is often
+			// empty, and Cloudflare sends no JA3 for most requests.
+			return plain(readHost(label, request) ?? "");
 		}
 
 		if (!wantsPage) {
