@@ -10,6 +10,7 @@
     "url": "git+https://github.com/jasontally/icanhazip.git"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "bench": "node bench.mjs"
   }
 }

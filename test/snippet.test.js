@@ -41,9 +41,23 @@ const call = async (url, { cf = CF, headers = {}, method = "GET" } = {}) => {
 test("bare path returns only the IP address, as text", async () => {
 	const response = await call("https://ip.jasontally.com/");
 
-	assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8");
+	// The headers match what icanhazip.com sends for the same request.
+	assert.equal(response.headers.get("content-type"), "text/plain");
+	assert.equal(response.headers.get("access-control-allow-origin"), "*");
+	assert.equal(response.headers.get("access-control-allow-methods"), "GET");
 	assert.equal(response.headers.get("cache-control"), "no-store");
 	assert.equal(await response.text(), "203.0.113.7\n");
+});
+
+test("the body is the IP address and one newline, the same as icanhazip.com", async () => {
+	// icanhazip.com answers "50.88.174.31\n", which is 13 bytes.
+	const response = await call("https://ip.jasontally.com/", {
+		headers: { "CF-Connecting-IP": "50.88.174.31" },
+	});
+	const body = await response.text();
+
+	assert.equal(body, "50.88.174.31\n");
+	assert.equal(Buffer.byteLength(body), 13);
 });
 
 test("any other query string still returns only the IP address", async () => {

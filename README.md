@@ -80,10 +80,39 @@ npm test
 `node --test` runs against a fake `Request`, so no network or account is
 needed.
 
+## Benchmark
+
+```console
+npm run bench
+```
+
+`bench.mjs` fetches `icanhazip.com` and checks this Snippet against it. The
+address from the live call goes into the Snippet, so the two bodies hold the
+same string and a byte comparison means something.
+
+The main page body equals the icanhazip.com body byte for byte. Both answer
+`<address>\n` with `content-type: text/plain`,
+`access-control-allow-origin: *` and `access-control-allow-methods: GET`.
+
+The Snippet sends two things that icanhazip.com does not send:
+
+| Difference                    | Why                                          |
+| ----------------------------- | -------------------------------------------- |
+| `cache-control: no-store`     | keeps an address out of the edge cache       |
+| the details page at `whoami` | the one feature of this project              |
+
+`icanhazip.com` also sends `set-cookie`, `cf-ray`, `alt-svc` and `server`.
+Cloudflare adds most of these on its own.
+
+The timing lines in `bench.mjs` are not a comparison. The icanhazip number is a
+full network round trip. The Snippet number is only the JavaScript, with no
+network and no edge. Measure the real end to end time after deploy.
+
 ## Files
 
-| File               | Purpose                                      |
-| ------------------ | -------------------------------------------- |
-| `snippet.js`       | the Snippet, the only file Cloudflare runs   |
-| `deploy.sh`        | DNS, code and rule deployment through `cf`   |
-| `test/snippet.test.js` | checks for both response shapes          |
+| File                  | Purpose                                    |
+| --------------------- | ------------------------------------------ |
+| `snippet.js`          | the Snippet, the only file Cloudflare runs |
+| `deploy.sh`           | DNS, code and rule deployment through `cf` |
+| `bench.mjs`           | byte and header check against icanhazip.com |
+| `test/snippet.test.js`| checks for both response shapes            |

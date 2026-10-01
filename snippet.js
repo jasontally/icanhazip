@@ -161,11 +161,14 @@ export default {
 			url.pathname === "/whoami" || url.searchParams.get("whoami") === "";
 
 		if (!wantsPage) {
+			// Same headers as icanhazip.com, so scripts see the same result.
+			// no-store is the one addition: it keeps an address out of edge cache.
 			return new Response(`${ip}\n`, {
 				headers: {
-					"content-type": "text/plain; charset=utf-8",
+					"content-type": "text/plain",
 					"cache-control": "no-store",
 					"access-control-allow-origin": "*",
+					"access-control-allow-methods": "GET",
 				},
 			});
 		}
