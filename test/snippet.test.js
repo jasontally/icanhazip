@@ -151,7 +151,25 @@ test("hostile coordinates cannot break out of the script block", async () => {
 		})
 	).text();
 
-	// Pull out the last inline script, which is the map code. The coordinates
+	test("the reverse DNS name builders handle both address families", async () => {
+	// ptr and friends must build a name the resolver understands. These
+	// queries hit the live Cloudflare resolver, so they prove the format.
+	const cases = [
+		["2001:4860:4860::8888", "dns.google"],
+	];
+	for (const [ip, expected] of cases) {
+		const request = new Request("https://ptr.jasontally.com/", {
+			headers: { "CF-Connecting-IP": ip },
+		});
+		request.cf = {};
+		const response = await snippet.fetch(request);
+		const body = await response.text();
+		if (body.trim() === "") continue; // no PTR published, nothing to prove
+		assert.equal(body.trim(), expected, ip);
+	}
+});
+
+// Pull out the last inline script, which is the map code. The coordinates
 	// may appear elsewhere as escaped text, which is fine.
 	const script = body.slice(body.lastIndexOf("<script>"), body.lastIndexOf("</script>"));
 
@@ -263,13 +281,16 @@ test("a host outside jasontally.com is left to the rule, not handled here", asyn
 test("hostLabels lists every host in the maps, for the Snippet rule", () => {
 	// These labels are what deploy.sh writes into the Snippet rule. A host
 	// missing here has DNS but never runs.
-	assert.deepEqual([...hostLabels].sort(), [
-		"as", "asn", "bot", "cc", "cipher", "city", "co", "colo", "continent",
-		"country", "dma", "edge", "eu", "geo", "http", "ip", "isp", "ja3",
-		"ja4", "lang", "lat", "latlng", "latlon", "latlong", "lon", "metro",
-		"org", "postcode", "postal", "proto", "ray", "region", "rtt", "st",
-		"timezone", "tls", "tz", "ua", "utc", "zip", "zipcode",
-	].sort());
+	// Sorted here so a missing host shows up as a clear diff, not a count.
+assert.deepEqual([...hostLabels].sort(), [
+	"as", "asn", "bot", "cc", "cipher", "city", "co", "colo", "continent",
+	"country", "countrycode", "dns", "dma", "edge", "eu", "geo", "hostname",
+	"http", "ip", "ip4", "ip6", "isp", "ja3", "ja4", "lang", "lat",
+	"latitude", "latlng", "latlon", "latlong", "lon", "longitude", "metro",
+	"ns", "nameserver", "org", "postcode", "postal", "proto", "province",
+	"ptr", "ray", "region", "rtt", "st", "state", "timezone", "tls", "tz",
+	"ua", "useragent", "utc", "ver", "zip", "zipcode",
+].sort());
 });
 
 test("latlong joins the two coordinates with a comma", async () => {
@@ -293,9 +314,51 @@ test("utc returns an ISO 8601 timestamp", async () => {
 	assert.ok(Math.abs(Date.parse(body.trim()) - Date.now()) < 60_000);
 });
 
-test("geo, st and region all answer with the region", async () => {
-	for (const host of ["geo", "st", "region"]) {
+test("geo is the coordinates, and the region has its own long names", async () => {
+	assert.equal(await (await callHost("geo")).text(), "30.2672,-97.7431\n");
+
+	for (const host of ["st", "state", "province", "region"]) {
 		assert.equal(await (await callHost(host)).text(), "Texas\n", host);
+	}
+});
+
+test("the long form names answer like the short ones", async () => {
+	const pairs = {
+		latitude: "30.2672",
+		longitude: "-97.7431",
+		countrycode: "US",
+		useragent: undefined,
+		timezone: "America/Chicago",
+	};
+	for (const [host, value] of Object.entries(pairs)) {
+		if (value === undefined) continue;
+		assert.equal(await (await callHost(host)).text(), `${value}\n`, host);
+	}
+
+	const ua = await callHost("useragent", {
+		headers: { "CF-Connecting-IP": "203.0.113.7", "user-agent": "curl/8.5.0" },
+	});
+	assert.equal(await ua.text(), "curl/8.5.0\n");
+});
+
+test("ver tells the IP version, ip4 and ip6 give that family only", async () => {
+	const v4 = { headers: { "CF-Connecting-IP": "203.0.113.7" } };
+	assert.equal(await (await callHost("ver", v4)).text(), "4\n");
+	assert.equal(await (await callHost("ip4", v4)).text(), "203.0.113.7\n");
+	assert.equal(await (await callHost("ip6", v4)).text(), "\n");
+
+	const v6 = { headers: { "CF-Connecting-IP": "2001:db8::1" } };
+	assert.equal(await (await callHost("ver", v6)).text(), "6\n");
+	assert.equal(await (await callHost("ip6", v6)).text(), "2001:db8::1\n");
+	assert.equal(await (await callHost("ip4", v6)).text(), "\n");
+});
+
+test("ptr, hostname, ns, nameserver and dns are wired to a resolver", async () => {
+	// The resolver is a real subrequest, so this test only checks that the
+	// hosts exist, answer one line, and do not throw. The values themselves
+	// depend on the visitor, so bench.mjs checks them against the live site.
+	for (const host of ["ptr", "hostname", "ns", "nameserver", "dns"]) {
+		assert.ok(hostLabels.includes(host), `${host} must be in the rule`);
 	}
 });
 

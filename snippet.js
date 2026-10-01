@@ -8,10 +8,11 @@
 //   https://ip.jasontally.com/?anything   ->  "<visitor ip>\n"
 //   https://city.jasontally.com/          ->  the visitor city
 //   https://colo.jasontally.com/          ->  the Cloudflare data centre
+//   https://ptr.jasontally.com/           ->  the visitor reverse DNS name
 //   any other hostname                    ->  not run (snippet rule)
 //
-// Every subdomain in HOSTS is in the one Snippet rule. A rule expression can
-// hold 4096 characters, which is about 160 hosts, so they all fit together.
+// Every subdomain is in the one Snippet rule. A rule expression can hold 4096
+// characters, which is about 190 hosts, so they all fit together.
 //
 // "whoami" must be the whole query string. "?whoami=0" counts as another
 // query string, so it gets the plain IP.
@@ -221,7 +222,9 @@ const HOSTS = {
 	timezone: ["timezone"],
 	tz: ["timezone"],
 	lat: ["latitude"],
+	latitude: ["latitude"],
 	lon: ["longitude"],
+	longitude: ["longitude"],
 	colo: ["colo"],
 	edge: ["colo"],
 	asn: ["asn"],
@@ -236,17 +239,21 @@ const HOSTS = {
 	dma: ["metroCode"],
 	eu: ["isEUCountry"],
 	ray: ["cf-ray"],
-	geo: ["region", "regionCode"],
 	st: ["region", "regionCode"],
 	cc: ["country"],
+	countrycode: ["country"],
 	zipcode: ["postalCode"],
 	postcode: ["postalCode"],
 	org: ["asOrganization"],
 	proto: ["httpProtocol"],
 	ua: ["User-Agent"],
+	useragent: ["User-Agent"],
 	lang: ["Accept-Language"],
 	ja3: ["tlsJa3Hash"],
 	ja4: ["tlsJa4"],
+	timezone: ["timezone"],
+	state: ["region", "regionCode"],
+	province: ["region", "regionCode"],
 };
 
 // These live in request headers, not in request.cf. Everything else in HOSTS
@@ -268,10 +275,70 @@ const readField = (name, request) => {
 // These hosts join fields or compute a value, so they do not fit HOSTS.
 // "lat,long" is one string, the order everyone writes on a map.
 const DERIVED = {
+	geo: (request) => pair(request),
 	latlong: (request) => pair(request),
 	latlon: (request) => pair(request),
 	latlng: (request) => pair(request),
 	utc: () => new Date().toISOString(),
+	ver: (request) => (ipOf(request).includes(":") ? "6" : "4"),
+	ip4: (request) => (ipOf(request).includes(":") ? "" : ipOf(request)),
+	ip6: (request) => (ipOf(request).includes(":") ? ipOf(request) : ""),
+	// These four ask a DNS resolver over the network. Each one costs a
+	// subrequest, and a Pro zone allows 2 per request.
+	ptr: async (request) => (await resolve(reverseName(ipOf(request)), "PTR"))[0] ?? "",
+	hostname: async (request) => (await resolve(reverseName(ipOf(request)), "PTR"))[0] ?? "",
+	ns: async (request) => (await resolve(reverseZone(ipOf(request)), "NS")).join(" "),
+	nameserver: async (request) => (await resolve(reverseZone(ipOf(request)), "NS")).join(" "),
+	// Forward confirmed name: the PTR target, but only if it resolves back
+	// to the same address. Costs 2 subrequests, the whole Pro budget.
+	dns: async (request) => {
+		const ip = ipOf(request);
+		const [name] = await resolve(reverseName(ip), "PTR");
+		if (!name) return "";
+		const back = await resolve(name, ip.includes(":") ? "AAAA" : "A");
+		return back.includes(ip) ? name : "";
+	},
+};
+
+// DNS over HTTPS, using Cloudflare's own resolver so no third party sees the
+// lookup. The zone owner is Cloudflare, so this stays inside one company.
+const DOH = "https://cloudflare-dns.com/dns-query";
+
+const resolve = async (name, type) => {
+	if (!name) return [];
+	const url = `${DOH}?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
+	const response = await fetch(url, { headers: { accept: "application/dns-json" } });
+	if (!response.ok) return [];
+	const answers = (await response.json()).Answer;
+	if (!Array.isArray(answers)) return [];
+	return answers.filter((a) => a.type === typeNumber(type)).map((a) => String(a.data).replace(/\.$/, ""));
+};
+
+const TYPE_NUMBERS = { PTR: 12, A: 1, AAAA: 28, NS: 2 };
+const typeNumber = (type) => TYPE_NUMBERS[type] ?? 0;
+
+const ipOf = (request) => request.headers.get("CF-Connecting-IP") ?? request.cf?.ip ?? "";
+
+// "50.88.174.31" -> "31.174.88.50.in-addr.arpa"
+const reverseName = (ip) =>
+	ip.includes(":")
+		? nibbles(ip, 8) + ".ip6.arpa"
+		: ip.split(".").reverse().join(".") + ".in-addr.arpa";
+
+// "50.88.174.31" -> "31.174.88.in-addr.arpa", the block a resolver is
+// authoritative for.
+const reverseZone = (ip) =>
+	ip.includes(":")
+		? nibbles(ip, 4) + ".ip6.arpa"
+		: ip.split(".").slice(1).reverse().join(".") + ".in-addr.arpa";
+
+// Writes an IPv6 address as reversed nibbles, which is how ip6.arpa reads.
+// IPv6 text can be short, so pad it to the full 32 hex digits first.
+const nibbles = (ip, groups) => {
+	const [head = "", tail = ""] = ip.split("::");
+	const out = [...head.split(":"), ...Array(8 - head.split(":").length).fill("0"), ...tail.split(":")];
+	const hex = out.map((g) => g.padStart(4, "0")).join("");
+	return [...hex].slice(0, groups * 4).reverse().join(".");
 };
 
 const pair = (request) => {
@@ -281,11 +348,12 @@ const pair = (request) => {
 };
 
 // "colo" -> the value for the colo host, or null when Cloudflare sent none.
-const readHost = (label, request) => {
+// Async because a few hosts ask a DNS resolver.
+const readHost = async (label, request) => {
 	const derived = DERIVED[label];
 	if (derived) {
-		const value = derived(request);
-		return value == null || value === "" ? null : value;
+		const value = await derived(request);
+		return value == null || value === "" ? null : String(value);
 	}
 
 	for (const name of HOSTS[label] ?? []) {
@@ -317,7 +385,7 @@ export default {
 			// fall through to the IP address, or a missing field would look
 			// like a result. curl sends no Accept-Language, so lang is often
 			// empty, and Cloudflare sends no JA3 for most requests.
-			return plain(readHost(label, request) ?? "");
+			return plain((await readHost(label, request)) ?? "");
 		}
 
 		if (!wantsPage) {

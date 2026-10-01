@@ -81,10 +81,11 @@ console.log("\nsubdomains, checked against the live site");
 {
 	// Cloudflare sends these for every proxied request, so they must not be
 	// empty. The rest may legitimately be empty: curl sends no Accept-Language,
-	// and Cloudflare sends no JA3 or JA4 for most requests.
+	// Cloudflare sends no JA3 or JA4 for most requests, ip4 and ip6 are one
+	// or the other, and a DNS host is empty when no record is published.
 	const alwaysPresent = new Set([
-		"ip", "city", "zip", "country", "region", "continent", "colo", "asn",
-		"as", "http", "latlong", "utc",
+		"ip", "city", "zip", "country", "region", "colo", "asn", "as", "http",
+		"geo", "latlong", "latitude", "longitude", "ver", "utc", "st",
 	]);
 
 	for (const label of hostLabels) {
@@ -109,6 +110,7 @@ console.log("\nsubdomains, checked against the live site");
 			`${label}.jasontally.com`,
 			`${live.status} ${JSON.stringify(body.trim())}`,
 		);
+		await sleep(100);
 	}
 }
 

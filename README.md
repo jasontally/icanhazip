@@ -41,8 +41,8 @@ You appear to be in Melbourne
 | `region`, `geo`, `st` | Region, or the code | `region`, then `regionCode` |
 | `continent` | Continent code | `continent` |
 | `timezone`, `tz` | IANA time zone | `timezone` |
-| `lat`, `lon` | One coordinate each | `latitude`, `longitude` |
-| `latlong`, `latlon`, `latlng` | Both coordinates, comma separated | `latitude`, `longitude` |
+| `lat`, `latitude`, `lon`, `longitude` | One coordinate each | `latitude`, `longitude` |
+| `geo`, `latlong`, `latlon`, `latlng` | Both coordinates, comma separated | `latitude`, `longitude` |
 | `colo`, `edge` | Data centre code | `colo` |
 | `asn` | Autonomous system number | `asn` |
 | `as`, `isp`, `org` | Autonomous system name | `asOrganization` |
@@ -55,14 +55,20 @@ You appear to be in Melbourne
 | `eu` | `true` or `false` | `isEUCountry` |
 | `ray` | Cloudflare Ray ID | `cf-ray` header |
 | `utc` | Request time, ISO 8601 | computed |
-| `ua` | User agent | `User-Agent` header |
+| `ua`, `useragent` | User agent | `User-Agent` header |
 | `lang` | Accepted languages | `Accept-Language` header |
 | `ja3`, `ja4` | TLS fingerprints | `tlsJa3Hash`, `tlsJa4` |
+| `ver` | `4` or `6` | computed |
+| `ip4` | The address, only for IPv4 | computed |
+| `ip6` | The address, only for IPv6 | computed |
+| `ptr`, `hostname` | Reverse DNS name | DNS lookup |
+| `ns`, `nameserver` | Nameservers for the address block | DNS lookup |
+| `dns` | Forward confirmed name | two DNS lookups |
 
-41 hosts in all. A few of them are often empty, and they answer with an empty
+55 hosts in all. A few of them are often empty, and they answer with an empty
 line rather than the IP address. `curl` sends no `Accept-Language`, so `lang`
 is empty for most shell use. Cloudflare sends `ja3` and `ja4` only for some
-requests.
+requests. `ip4` and `ip6` are one or the other, never both.
 
 ```console
 $ curl https://lang.jasontally.com/
@@ -70,26 +76,59 @@ $ [ -n "$(curl -s https://lang.jasontally.com/)" ] && echo "browser" || echo "no
 no language sent
 ```
 
+### The DNS hosts
+
+Five hosts ask a resolver over the network. They use
+[`cloudflare-dns.com`](https://developers.cloudflare.com/1.1.1.1/dns/encryption/dns-over-https/)
+in JSON form, so no third party sees the lookup. The zone owner is Cloudflare,
+so the lookup stays inside one company.
+
+```console
+$ curl https://ptr.jasontally.com/
+syn-050-088-174-031.res.spectrum.com
+$ curl https://ns.jasontally.com/
+ns2-rev.proxad.net ns3-rev.proxad.net
+```
+
+`ptr` and `hostname` ask for the PTR record of the visitor address.
+`ns` and `nameserver` ask for the nameservers that are authoritative for the
+block the address sits in, which is the /24 for IPv4 and the /64 for IPv6.
+`dns` asks for the PTR record and then checks that it points back at the same
+address, which is what a mail server checks before accepting mail. That is why
+it is often empty. Many home ISPs publish a PTR name that has no forward
+record, so forward confirmation fails.
+
+These hosts cost a subrequest each. A Pro zone allows 2 subrequests per
+request, and `dns` uses both. They also take longer than the other hosts,
+about 120 ms to 400 ms against 90 ms, because the lookup is a network round
+trip.
+
+| Host | Subrequests |
+| --- | --- |
+| `ptr`, `hostname` | 1 |
+| `ns`, `nameserver` | 1 |
+| `dns` | 2 |
+
 `/whoami` on any of these hosts still gives the HTML page, so you can read one
 value or read everything.
 
 The values are approximate. Cloudflare derives them from the network, not from
 a GPS fix, so `city` can be the city centre and `zip` can be the wrong one.
 
-`request.cf` carries 59 fields. These 41 cover the ones with a name people ask
+`request.cf` carries 59 fields. These 55 cover the ones with a name people ask
 for. The rest are TLS handshake transcripts, certificate blobs,
 `tlsExportedAuthenticator`, `edgeL4`, `requestPriority` and
 `verifiedBotCategory`. None has a common name, so no subdomain holds them.
 
 ### One Snippet, one rule
 
-All 41 hosts share one Snippet and one rule. The rule is a set test:
+All 55 hosts share one Snippet and one rule. The rule is a set test:
 
 ```
 (http.host in {"ip.jasontally.com" "city.jasontally.com" ...})
 ```
 
-A rule expression holds at most 4096 characters. The current rule is 921, so
+A rule expression holds at most 4096 characters. The current rule is 1258, so
 there is room for about 190 hosts before a second Snippet is needed.
 `deploy.sh` measures the expression and stops if it would pass the limit.
 
@@ -102,21 +141,23 @@ Snippets have three limits. Two are comfortable. One is the ceiling.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size | 11901 bytes | 32768 | 36% |
-| Rule expression | 921 chars | 4096 | 23% |
+| Source size | 15074 bytes | 32768 | 46% |
+| Rule expression | 1258 chars | 4096 | 31% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
 **The rule expression is the limit that binds.** A rule may hold 4096 characters
 and each host costs about 21, so one Snippet reaches roughly 190 hosts. The
-source would fit about 1000 more, and execution time does not grow at all,
+source would fit about 800 more, and execution time does not grow at all,
 because the handler looks up one key in an object instead of walking a list.
 
 `deploy.sh` measures the expression before it sends anything and stops if it
 would pass 4096. At that point the fix is a second Snippet with the overflow
 hosts, not a bigger one.
 
-Execution time stays low because there are no subrequests and no `fetch()`. The
-whole handler builds a string and returns it.
+Execution time stays low because the handler builds a string and returns it.
+The five DNS hosts do call out to a resolver, so they cost more, but that is
+network wait rather than computation. All of them stayed inside the 5 ms budget
+on the live site.
 
 ```console
 $ npm run bench:cost
