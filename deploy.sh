@@ -65,7 +65,9 @@ const current = JSON.parse(readFileSync(process.argv[1], "utf8"));
 const kept = (current.result ?? current).filter((rule) => rule.snippet_name !== mine.snippet_name);
 writeFileSync(process.argv[1], JSON.stringify({ rules: [...kept, mine] }, null, 2));
 ' "$rules_file"
-"${CF[@]}" snippets rules update --rules "@$rules_file"
+# CEILING: --rules wants the JSON array itself, so a temp path does not work
+# here. --body takes the {"rules": [...]} object and does accept @path.
+"${CF[@]}" snippets rules update --body "@$rules_file"
 echo "expression: http.host eq \"$HOST\""
 
 step "Done"

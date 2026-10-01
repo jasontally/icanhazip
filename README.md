@@ -66,10 +66,17 @@ is never routable.
 
 ### Known ceiling
 
-`cf` v1.0.0-beta.10 sends the snippet code as multipart part `file`, but the
-Snippets API needs that part named `files`, so `cf snippets update` fails.
-`deploy.sh` tries `cf` first and falls back to the documented `curl` form.
-Remove the fallback once `cf` sends `files`.
+Two `cf` v1.0.0-beta.10 bugs are worked around in `deploy.sh`. Both are marked
+in the file with a CEILING comment.
+
+1. `cf snippets update` sends the code as multipart part `file`, but the API
+   needs that part named `files`, so the call fails. `deploy.sh` tries `cf`
+   first, then falls back to the documented `curl` form.
+2. `cf snippets rules update --rules` does not accept an `@path`, though its
+   own help text says it does. `--body "@path"` works, so `deploy.sh` uses
+   that.
+
+Remove both workarounds once `cf` is fixed.
 
 ## Test
 
