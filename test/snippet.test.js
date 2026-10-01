@@ -109,6 +109,61 @@ test("/whoami path returns the same HTML page", async () => {
 	assert.match(await response.text(), /<!DOCTYPE html>/);
 });
 
+test("the whoami page embeds a map with pinned Leaflet and a marker", async () => {
+	const response = await call("https://ip.jasontally.com/whoami");
+	const body = await response.text();
+
+	assert.match(body, /<div id="map"/);
+	assert.match(body, /leaflet@1\.9\.4\/dist\/leaflet\.js/);
+	// Subresource Integrity must pin both files.
+	assert.match(body, /leaflet\.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2\/Z9VM\+kNiyxNV1lvTlZBo="/);
+	assert.match(body, /leaflet\.css" integrity="sha256-p4NxAoJBhIIN\+hmNHrzRCf9tD\/miZyoHS5obTRR9BMY="/);
+	assert.match(body, /crossorigin=""/);
+	// The coordinates reach Leaflet as numbers, not as strings from the CF object.
+	assert.match(body, /setView\(\[30\.2672, -97\.7431\], 5\)/);
+	assert.match(body, /circleMarker\(\[30\.2672, -97\.7431\]/);
+	assert.match(body, /tile\.openstreetmap\.org/);
+	assert.match(body, /OpenStreetMap contributors/);
+});
+
+test("the page warns that the map calls third parties, and offers a way out", async () => {
+	const body = await (await call("https://ip.jasontally.com/whoami")).text();
+
+	assert.match(body, /unpkg\.com and tile\.openstreetmap\.org/);
+	assert.match(body, /id="no-map"/);
+	assert.match(body, /where\.remove\(\)/);
+});
+
+test("no coordinates means no map and no Leaflet", async () => {
+	const body = await (
+		await call("https://ip.jasontally.com/whoami", { cf: { ...CF, latitude: undefined, longitude: undefined } })
+	).text();
+
+	assert.doesNotMatch(body, /leaflet/);
+	assert.doesNotMatch(body, /<div id="map"/);
+	assert.match(body, /&mdash;<\/span>/);
+});
+
+test("hostile coordinates cannot break out of the script block", async () => {
+	const body = await (
+		await call("https://ip.jasontally.com/whoami", {
+			cf: { ...CF, latitude: "30.2);alert(1);//", longitude: "-97.7" },
+		})
+	).text();
+
+	// Pull out the last inline script, which is the map code. The coordinates
+	// may appear elsewhere as escaped text, which is fine.
+	const script = body.slice(body.lastIndexOf("<script>"), body.lastIndexOf("</script>"));
+
+	// Nothing from the coordinates may reach the script as code. Number()
+	// drops the injected text, so Leaflet gets a real number or NaN.
+	assert.doesNotMatch(script, /alert\(1\)/);
+	assert.match(script, /setView\(\[NaN, -97\.7\], 5\)/);
+	assert.match(script, /circleMarker\(\[NaN, -97\.7\]/);
+	// The popup label is built from those numbers, so it cannot carry the text.
+	assert.match(script, /\.bindPopup\("NaN, -97\.7"\)/);
+});
+
 test("the IP comes from CF-Connecting-IP and falls back to request.cf", async () => {
 	const fromHeader = await call("https://ip.jasontally.com/", {
 		headers: { "CF-Connecting-IP": "198.51.100.9" },
@@ -135,6 +190,8 @@ test("hostile header values cannot inject markup into the whoami page", async ()
 	});
 	const body = await response.text();
 
-	assert.ok(!body.includes("<script>"), "raw script tag must not survive");
-	assert.match(body, /&lt;script&gt;/);
+	// The page has its own scripts for the map, so check the visitor value
+	// itself never opens a tag.
+	assert.ok(!body.includes('<script>alert("x")'), "raw tag from the header must not survive");
+	assert.match(body, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
 });

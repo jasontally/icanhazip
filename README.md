@@ -28,6 +28,14 @@ The `whoami` page shows the request, location, network, TLS and browser
 sections, then dumps every request header and the whole `request.cf` object as
 JSON. The dump means new Cloudflare fields show up with no code change.
 
+Under Location there is an interactive Leaflet map with a marker at the
+approximate coordinates. It loads Leaflet from unpkg.com and tiles from
+tile.openstreetmap.org, both pinned by SRI, so the page is no longer private
+to the visitor. A link below the map removes it and stops the tile requests.
+The upstream [cf-whoami-snippet](https://github.com/xyTom/cf-whoami-snippet)
+does not do this. It only builds an OpenStreetMap URL, which this project also
+has as a plain link next to the map.
+
 ## Deploy
 
 ```console

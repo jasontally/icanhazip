@@ -47,6 +47,37 @@ const table = (rows) =>
 
 const section = (title, body) => `<h2>${escapeHtml(title)}</h2>${body}`;
 
+// Leaflet is 45 KB, over the 32 KB Snippet limit, so it loads from a CDN.
+// SRI pins the exact bytes. Loading it makes this page contact unpkg.com and
+// tile.openstreetmap.org, so the page is no longer private to the visitor.
+const map = (latitude, longitude) => {
+	// Coordinates come from Cloudflare, but they go inside a script block, so
+	// keep them to plain numbers and nothing else.
+	const lat = String(Number(latitude));
+	const lon = String(Number(longitude));
+	return `<div id="map" role="img" aria-label="Map at ${escapeHtml(latitude)}, ${escapeHtml(longitude)}"></div>
+<p class="note">Loading a map sends this visit to unpkg.com and tile.openstreetmap.org. <a href="#" id="no-map">Hide the map</a> and stop that.</p>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  window.addEventListener("load", function () {
+    var where = L.map("map", { scrollWheelZoom: false }).setView([${lat}, ${lon}], 5);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(where);
+    L.circleMarker([${lat}, ${lon}], { radius: 8, color: "#2563eb", fillOpacity: 0.6 })
+      .addTo(where)
+      .bindPopup(${JSON.stringify(`${lat}, ${lon}`)});
+    document.getElementById("no-map").addEventListener("click", function (event) {
+      event.preventDefault();
+      where.remove();
+      document.getElementById("map").remove();
+    });
+  });
+</script>`;
+};
+
 const detailsPage = (request, ip) => {
 	const url = new URL(request.url);
 	const cf = request.cf ?? {};
@@ -74,6 +105,8 @@ th{width:14rem;font-weight:600;opacity:.75}
 code,td{overflow-wrap:anywhere}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font-size:.85rem;background:color-mix(in srgb,currentColor 5%,transparent);padding:.75rem;border-radius:.25rem}
 .none{opacity:.4}
+#map{height:20rem;border-radius:.25rem;margin:0;background:color-mix(in srgb,currentColor 8%,transparent);border:1px solid color-mix(in srgb,currentColor 15%,transparent)}
+.note{font-size:.85rem;margin:.5rem 0 0}
 footer{margin-top:2.5rem;font-size:.85rem;opacity:.6}
 </style>
 <h1>${escapeHtml(ip)}</h1>
@@ -114,6 +147,7 @@ ${section(
 		],
 	]),
 )}
+${located ? section("Where that is", map(cf.latitude, cf.longitude)) : ""}
 ${section(
 	"Network",
 	table([
