@@ -110,6 +110,19 @@ test("/whoami path returns the same HTML page", async () => {
 	assert.match(await response.text(), /<!DOCTYPE html>/);
 });
 
+test("both map pages send a Referer, as the OSM tile policy requires", async () => {
+	// The tile usage policy forbids a Referrer-Policy that stops the Referer
+	// header reaching tile.openstreetmap.org, and says referer-stripping
+	// traffic may be blocked without notice. "origin" satisfies both: the
+	// header is sent, and it carries the origin only, never the path.
+	for (const target of ["https://ip.jasontally.com/whoami", "https://map.jasontally.com/"]) {
+		const body = await (await call(target)).text();
+		const tags = [...body.matchAll(/<meta name="referrer" content="([^"]+)">/g)];
+		assert.equal(tags.length, 1, `${target} needs one referrer meta tag`);
+		assert.equal(tags[0][1], "origin", `${target} must not strip the Referer`);
+	}
+});
+
 test("the whoami page embeds a map with pinned Leaflet and a marker", async () => {
 	const response = await call("https://ip.jasontally.com/whoami");
 	const body = await response.text();

@@ -105,6 +105,21 @@ $ curl https://epoch.jasontally.com/
 [Open-Meteo](https://open-meteo.com/), free and no API key. Each host asks for
 the one field it returns, which keeps the response as small as the API allows.
 
+**Rate limits.** The free tier allows 600 calls a minute, 5000 an hour, 10,000 a
+day and 300,000 a month, with no uptime guarantee and no hard cutoff in place
+yet. One request to one weather host is one call, so 10,000 requests to
+`temp` on one day uses the entire daily allowance. Every weather host is
+uncached by design, since the answer depends on the visitor, so there is no
+way to soften a burst from here. A Cloudflare Cache Rule keyed on nothing would
+leak one visitor's weather to another, which is worse. Three things follow:
+keep these hosts off any front page, expect them to answer empty once the
+allowance runs out, and expect them to be of little use above a few hundred
+requests a day.
+
+The free tier is **non-commercial**, and the data is CC BY 4.0, which means
+attribution is a licence obligation rather than a courtesy. Neither page shows
+it. Add a credit line to `snippet.js` before this goes anywhere commercial.
+
 | Host | Value |
 | --- | --- |
 | `temp`, `tempc`, `celsius` | temperature in Celsius |
@@ -144,6 +159,10 @@ checks that it points back at the same address, the same test a mail server runs
 before accepting mail. That is why `dns` is often empty: many home ISPs publish
 a PTR name with no forward record.
 
+No rate limit applies here, and none is expected. The resolver runs on the same
+network as the Snippet that calls it, which makes these the most dependable of
+every host that reaches outside Cloudflare's own metadata.
+
 ```console
 $ curl https://ptr.jasontally.com/
 syn-050-088-174-031.res.spectrum.com
@@ -181,7 +200,17 @@ the prefix is what the network announces in BGP. Announced blocks are sometimes
 tighter.
 
 These hosts use RIPE RIS at `stat.ripe.net`, free, no key, answering for all
-five registries. RDAP would suit better, since it replaces WHOIS, but
+five registries.
+
+**Rate limits.** RIPEstat sets no limit on the number of requests, but asks you
+to mail `stat@ripe.net` if you plan to make **more than 1000 requests a day**
+regularly, and caps traffic at **8 concurrent requests from one address**. The
+subrequests leave from Cloudflare's edge rather than from the visitor, so a
+burst of visitors shares one address for that cap. Nothing here caches, so
+above roughly 1000 requests a day this is worth registering, and above a few
+hundred concurrent requests a day these hosts start failing.
+
+RDAP would suit better, since it replaces WHOIS, but
 `rdap.org` answers **403 to Cloudflare's own network**. Reaching a RIR directly
 needs the IANA bootstrap file to know which one, and a Snippet cannot cache
 that file. Ceiling and upgrade path sit in the comment above `whois` in
@@ -198,7 +227,21 @@ $ curl -o /dev/null -w '%{http_code} %{size_download}\n' https://map.jasontally.
 ```
 
 It uses the same SRI-pinned Leaflet as `/whoami`, where the map sits under
-Location. Upstream
+Location.
+
+**Rate limits and policy.** Leaflet comes from unpkg.com, a public CDN with no
+published limit, and SRI pins the exact bytes, so a tampered copy fails to load
+rather than runs. Tiles come from `tile.openstreetmap.org`, run on donations
+with no SLA. The [tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
+requires visible attribution, a valid `Referer` header on web requests, and no
+prefetching, and it says access may be withdrawn without notice if usage
+degrades the service for others. Three obligations follow from that and all
+three are met: attribution is in the corner, `Referrer-Policy` is `origin` so
+the header is sent while the path stays private, and only tiles for the current
+viewport are fetched. What is not bounded is volume, so a popular page here
+costs real money from someone else.
+
+Upstream
 [cf-whoami-snippet](https://github.com/xyTom/cf-whoami-snippet) does neither; it
 builds only an OpenStreetMap URL, which this project also carries as a plain
 link beside the map. When Cloudflare sends no coordinates, both pages say so
@@ -226,18 +269,20 @@ no language sent
 
 ## Where the values come from
 
-| Source | Hosts | Third party sees the visitor |
-| --- | --- | --- |
-| `request.cf` | 42 | no |
-| `new Date()` | 16 | no |
-| computed in the handler | 11 | no |
-| `cloudflare-dns.com` | 5 | no, stays inside Cloudflare |
-| `stat.ripe.net` | 7 | yes, RIPE NCC |
-| `api.open-meteo.com` | 16 | yes, Open-Meteo in Switzerland |
-| unpkg.com, tile.openstreetmap.org | `map` and `/whoami` | yes, for the page only |
+| Source | Hosts | Third party sees the visitor | Rate limited |
+| --- | --- | --- | --- |
+| `request.cf` | 42 | no | no |
+| `new Date()` | 16 | no | no |
+| computed in the handler | 11 | no | no |
+| `cloudflare-dns.com` | 5 | no, stays inside Cloudflare | no |
+| `stat.ripe.net` | 7 | yes, RIPE NCC | 8 concurrent, register above 1000 a day |
+| `api.open-meteo.com` | 16 | yes, Open-Meteo in Switzerland | 10,000 a day on the free tier |
+| unpkg.com, tile.openstreetmap.org | `map` and `/whoami` | yes, for the page only | tiles: none published, may be withdrawn |
 
 74 of the 98 never leave Cloudflare. 23 reach a third party, and 1 returns a
-page.
+page. The five DNS hosts are not rate limited and are the most reliable of the
+group, since they run on Cloudflare's own resolver in the same network as the
+Snippet itself.
 
 `request.cf` carries 59 fields. Those 42 hosts cover the ones people ask for by
 name. Of the other 17, most are TLS handshake transcripts, certificate blobs,
@@ -263,7 +308,7 @@ minified build lists the same hosts before uploading.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 14852 bytes | 32768 | 45% |
+| Source size, as uploaded minified | 15296 bytes | 32768 | 47% |
 | Rule expression | 2256 chars | 4096 | 55% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
@@ -354,7 +399,7 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-26312 bytes -> 14852 bytes, 43.6% smaller, 17916 free of 32768
+26756 bytes -> 15296 bytes, 42.8% smaller, 17472 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs
@@ -394,17 +439,9 @@ npm test
 
 `node --test` runs against a fake `Request`, so no network or account is needed.
 It covers both response shapes, the date and weather splits, the `Number()`
-guard that stops a hostile coordinate reaching the script block, and the WMO
-table, which is read through the module so it also passes on a minified build.
-
-```console
-$ npm run lint:readme
-99 sentences in the prose
-
-em dashes: 0
-stock phrases found: 0
-  none
-```
+guard that stops a hostile coordinate reaching the script block, the `origin`
+Referrer-Policy that the tile policy needs, and the WMO table, which is read
+through the module so it also passes on a minified build.
 
 ## Benchmark
 
@@ -445,7 +482,6 @@ trip, while the Snippet number is only the JavaScript, without network or edge.
 | `bench.mjs` | byte and header check against icanhazip.com, plus all 98 hosts live |
 | `cost.mjs` | measures size, rule size and execution time |
 | `runtime.mjs` | compares source and minified run time |
-| `lint-readme.mjs` | flags stock phrasing and repeated sentence openers |
 | `test/snippet.test.js` | checks every response shape |
 
 The repo holds the readable source, not the uploaded bytes. `npm run

@@ -126,7 +126,10 @@ body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="no-referrer">
+<!-- origin, not no-referrer: the OSM tile usage policy requires a valid
+     Referer header on web tile requests, and referer-stripping traffic may
+     be blocked without notice. This sends the origin only, not the path. -->
+<meta name="referrer" content="origin">
 <title>${escapeHtml(lat)}, ${escapeHtml(lon)}</title>
 <style>
 :root{color-scheme:light dark}
@@ -175,7 +178,10 @@ const detailsPage = (request, ip) => {
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="no-referrer">
+<!-- origin, not no-referrer: the OSM tile usage policy requires a valid
+     Referer header on web tile requests, and referer-stripping traffic may
+     be blocked without notice. This sends the origin only, not the path. -->
+<meta name="referrer" content="origin">
 <title>${escapeHtml(ip)} &mdash; whoami</title>
 <style>
 :root{color-scheme:light dark}

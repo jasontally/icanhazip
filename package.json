@@ -13,7 +13,6 @@
     "test": "node --test",
     "bench": "node bench.mjs",
     "bench:cost": "node cost.mjs",
-    "bench:runtime": "node runtime.mjs",
-    "lint:readme": "node lint-readme.mjs"
+    "bench:runtime": "node runtime.mjs"
   }
 }
