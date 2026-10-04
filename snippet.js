@@ -317,7 +317,6 @@ const HOSTS = {
 	lang: ["Accept-Language"],
 	ja3: ["tlsJa3Hash"],
 	ja4: ["tlsJa4"],
-	timezone: ["timezone"],
 	state: ["region", "regionCode"],
 	province: ["region", "regionCode"],
 };
@@ -379,6 +378,152 @@ const DERIVED = {
 	// than the allocation.
 	prefix: (request) => announcedPrefix(ipOf(request)),
 	bgp: (request) => announcedPrefix(ipOf(request)),
+
+	// Splits of the ISO timestamp. Same clock, different slice of the string.
+	date: () => new Date().toISOString().slice(0, 10),
+	day: () => new Date().toISOString().slice(0, 10),
+	time: () => new Date().toISOString().slice(11, 19),
+	now: () => new Date().toISOString(),
+	today: () => new Date().toISOString().slice(0, 10),
+	year: () => new Date().toISOString().slice(0, 4),
+	month: () => new Date().toISOString().slice(5, 7),
+	hour: () => new Date().toISOString().slice(11, 13),
+	minute: () => new Date().toISOString().slice(14, 16),
+	second: () => new Date().toISOString().slice(17, 19),
+	epoch: () => String(Math.floor(Date.now() / 1000)),
+	timestamp: () => String(Math.floor(Date.now() / 1000)),
+	clock: () => new Date().toISOString().slice(11, 19),
+	utcdate: () => new Date().toISOString().slice(0, 10),
+	utctime: () => new Date().toISOString().slice(11, 19),
+
+	// Weather for the visitor coordinates. Open-Meteo is free and needs no
+	// key. Each host asks for only the one field it returns, so the response
+	// is as small as the API will make it.
+	temp: (request) => weather(request, "temperature_2m"),
+	tempc: (request) => weather(request, "temperature_2m"),
+	celsius: (request) => weather(request, "temperature_2m"),
+	tempf: (request) => weather(request, "temperature_2m", "fahrenheit"),
+	fahrenheit: (request) => weather(request, "temperature_2m", "fahrenheit"),
+	feels: (request) => weather(request, "apparent_temperature"),
+	humidity: (request) => weather(request, "relative_humidity_2m"),
+	wind: (request) => weather(request, "wind_speed_10m"),
+	clouds: (request) => weather(request, "cloud_cover"),
+	precip: (request) => weather(request, "precipitation"),
+	elevation: (request) => elevation(request),
+	elev: (request) => elevation(request),
+	sunrise: (request) => daily(request, "sunrise"),
+	sunset: (request) => daily(request, "sunset"),
+	wmo: (request) => weather(request, "weather_code"),
+	// A missing code must stay missing. Number("") is 0, and 0 is "clear sky",
+	// so an empty answer would be reported as fine weather.
+	weather: async (request) => {
+		const code = (await weather(request, "weather_code")).trim();
+		return code === "" ? "" : describeWeather(Number(code));
+	},
+};
+
+// WMO weather interpretation codes, the standard table Open-Meteo documents.
+// A number is not useful on its own, so weather turns it into words.
+const WMO = {
+	0: "clear sky",
+	1: "mainly clear",
+	2: "partly cloudy",
+	3: "overcast",
+	45: "fog",
+	48: "rime fog",
+	51: "light drizzle",
+	53: "moderate drizzle",
+	55: "dense drizzle",
+	56: "light freezing drizzle",
+	57: "dense freezing drizzle",
+	61: "slight rain",
+	63: "moderate rain",
+	65: "heavy rain",
+	66: "light freezing rain",
+	67: "heavy freezing rain",
+	71: "slight snowfall",
+	73: "moderate snowfall",
+	75: "heavy snowfall",
+	77: "snow grains",
+	80: "slight rain showers",
+	81: "moderate rain showers",
+	82: "violent rain showers",
+	85: "slight snow showers",
+	86: "heavy snow showers",
+	95: "thunderstorm",
+	96: "thunderstorm with hail",
+	97: "heavy thunderstorm",
+	99: "thunderstorm with heavy hail",
+};
+
+const describeWeather = (code) => WMO[code] ?? "";
+
+// Exported so a test can check every code is present, and so the table can be
+// reused without the rest of the module.
+export const wmoCodes = WMO;
+
+const weather = async (request, field, unit) => {
+	const coords = coordinates(request);
+	if (!coords) return "";
+	try {
+		const url = new URL("https://api.open-meteo.com/v1/forecast");
+		url.searchParams.set("latitude", coords.lat);
+		url.searchParams.set("longitude", coords.lon);
+		url.searchParams.set("current", field);
+		url.searchParams.set("timezone", "UTC");
+		if (unit) url.searchParams.set("temperature_unit", unit);
+		const response = await fetch(url, { headers: { accept: "application/json" } });
+		if (!response.ok) return "";
+		const value = (await response.json()).current?.[field];
+		return value == null ? "" : String(value);
+	} catch {
+		return "";
+	}
+};
+
+// Elevation sits beside current, not inside it, so it needs its own shape.
+const elevation = async (request) => {
+	const coords = coordinates(request);
+	if (!coords) return "";
+	try {
+		const url = new URL("https://api.open-meteo.com/v1/forecast");
+		url.searchParams.set("latitude", coords.lat);
+		url.searchParams.set("longitude", coords.lon);
+		url.searchParams.set("current", "temperature_2m");
+		const response = await fetch(url, { headers: { accept: "application/json" } });
+		if (!response.ok) return "";
+		const value = (await response.json()).elevation;
+		return value == null ? "" : String(value);
+	} catch {
+		return "";
+	}
+};
+
+// Sunrise and sunset are daily fields, and daily needs a timezone parameter.
+const daily = async (request, field) => {
+	const coords = coordinates(request);
+	if (!coords) return "";
+	try {
+		const url = new URL("https://api.open-meteo.com/v1/forecast");
+		url.searchParams.set("latitude", coords.lat);
+		url.searchParams.set("longitude", coords.lon);
+		url.searchParams.set("daily", field);
+		url.searchParams.set("timezone", "UTC");
+		const response = await fetch(url, { headers: { accept: "application/json" } });
+		if (!response.ok) return "";
+		const value = (await response.json()).daily?.[field]?.[0];
+		return value == null ? "" : String(value);
+	} catch {
+		return "";
+	}
+};
+
+// "30.2672,-97.7431" with both halves proven to be numbers, or null.
+const coordinates = (request) => {
+	const lat = Number(readField("latitude", request));
+	const lon = Number(readField("longitude", request));
+	if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+	return { lat: String(lat), lon: String(lon) };
 };
 
 // RIPE RIS WHOIS, free and keyless, covers all five registries. It answers

@@ -12,6 +12,7 @@
   "scripts": {
     "test": "node --test",
     "bench": "node bench.mjs",
-    "bench:cost": "node cost.mjs"
+    "bench:cost": "node cost.mjs",
+    "bench:runtime": "node runtime.mjs"
   }
 }

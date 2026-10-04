@@ -69,8 +69,21 @@ You appear to be in Melbourne
 | `cidr` | Allocated CIDR | WHOIS |
 | `prefix`, `bgp` | Announced prefix | BGP route |
 | `map` | The map on its own page | page, not a value |
+| `date`, `day`, `today`, `utcdate` | Date part of `utc` | computed |
+| `time`, `utctime`, `clock` | Time part of `utc` | computed |
+| `year`, `month`, `hour`, `minute`, `second` | One part each | computed |
+| `epoch`, `timestamp` | Unix seconds | computed |
+| `now` | The whole ISO string | computed |
+| `temp`, `tempc`, `celsius` | Temperature in Celsius | weather |
+| `tempf`, `fahrenheit` | Temperature in Fahrenheit | weather |
+| `feels` | Apparent temperature | weather |
+| `humidity`, `wind`, `clouds`, `precip` | Those readings | weather |
+| `elevation`, `elev` | Metres above sea level | weather |
+| `sunrise`, `sunset` | ISO times | weather |
+| `wmo` | Numeric weather code | weather |
+| `weather` | That code in words | weather |
 
-67 hosts in all. A few of them are often empty, and they answer with an empty
+98 hosts in all. A few of them are often empty, and they answer with an empty
 line rather than the IP address. `curl` sends no `Accept-Language`, so `lang`
 is empty for most shell use. Cloudflare sends `ja3` and `ja4` only for some
 requests. `ip4` and `ip6` are one or the other, never both.
@@ -119,6 +132,60 @@ The WHOIS and BGP hosts below also cost one subrequest each.
 `/whoami` on any of these hosts still gives the HTML page, so you can read one
 value or read everything.
 
+### The date and time hosts
+
+These are slices of the same clock as `utc`, so they all agree with each other.
+
+| Host | Value |
+| --- | --- |
+| `date`, `day`, `today`, `utcdate` | `2026-10-04` |
+| `time`, `utctime`, `clock` | `14:39:51` |
+| `year`, `month` | `2026`, `10` |
+| `hour`, `minute`, `second` | `14`, `39`, `51` |
+| `epoch`, `timestamp` | Unix seconds |
+| `now` | the whole ISO string |
+
+```console
+$ curl https://date.jasontally.com/
+2026-10-04
+$ curl https://epoch.jasontally.com/
+1791124791
+```
+
+Nothing leaves Cloudflare for these. They are string slices of `new Date()`.
+
+### The weather hosts
+
+Weather for the visitor coordinates, from
+[Open-Meteo](https://open-meteo.com/), which is free and needs no API key. Each
+host asks for only the one field it returns, so the response is as small as the
+API will make it.
+
+```console
+$ curl https://temp.jasontally.com/
+29.3
+$ curl https://weather.jasontally.com/
+mainly clear
+$ curl https://sunset.jasontally.com/
+2026-10-04T23:05
+```
+
+| Host | Value |
+| --- | --- |
+| `temp`, `tempc`, `celsius` | temperature in Celsius |
+| `tempf`, `fahrenheit` | temperature in Fahrenheit |
+| `feels` | apparent temperature |
+| `humidity`, `wind`, `clouds`, `precip` | those readings |
+| `elevation`, `elev` | metres above sea level |
+| `sunrise`, `sunset` | ISO local times |
+| `wmo` | the numeric WMO weather code |
+| `weather` | that code in words |
+
+These hosts send the visitor coordinates to Open-Meteo, a third party in
+Switzerland. That is a different privacy posture from the DNS hosts, which stay
+inside Cloudflare. The coordinates are the same coarse ones as `lat` and `lon`,
+which `map` and `/whoami` already show.
+
 ### The address block
 
 Cloudflare reports `asn` and `as`, which come from the routing registry. The
@@ -165,14 +232,14 @@ map.
 The values are approximate. Cloudflare derives them from the network, not from
 a GPS fix, so `city` can be the city centre and `zip` can be the wrong one.
 
-`request.cf` carries 59 fields. These 67 cover the ones with a name people ask
+`request.cf` carries 59 fields. These 98 cover the ones with a name people ask
 for. The rest are TLS handshake transcripts, certificate blobs,
 `tlsExportedAuthenticator`, `edgeL4`, `requestPriority` and
 `verifiedBotCategory`. None has a common name, so no subdomain holds them.
 
 ### One Snippet, one rule
 
-All 67 hosts share one Snippet and one rule. The rule is a set test:
+All 98 hosts share one Snippet and one rule. The rule is a set test:
 
 ```
 (http.host in {"ip.jasontally.com" "city.jasontally.com" ...})
@@ -191,27 +258,65 @@ Snippets have three limits. Two are comfortable. One is the ceiling.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size | 20737 bytes | 32768 | 63% |
-| Rule expression | 1525 chars | 4096 | 37% |
+| Source size, uploaded minified | 14852 bytes | 32768 | 45% |
+| Rule expression | 2256 chars | 4096 | 55% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
 **The rule expression is the limit that binds.** A rule may hold 4096 characters
 and each host costs about 21, so one Snippet reaches roughly 190 hosts. The
-source would fit about 550 more, and execution time does not grow at all,
-because the handler looks up one key in an object instead of walking a list.
+minified source has room for about 1200 more names, and execution time does not
+grow at all, because the handler looks up one key in an object instead of
+walking a list.
 
 `deploy.sh` measures the expression before it sends anything and stops if it
 would pass 4096. At that point the fix is a second Snippet with the overflow
 hosts, not a bigger one.
 
-Execution time stays low because the handler builds a string and returns it.
-The five DNS hosts do call out to a resolver, so they cost more, but that is
-network wait rather than computation. All of them stayed inside the 5 ms budget
-on the live site.
+Execution time stays low because the handler builds a string and returns it. The
+DNS and weather hosts do call out over the network, so they cost more, but that
+is network wait rather than computation. All of them stayed inside the 5 ms
+budget on the live site.
 
 ```console
 $ npm run bench:cost
 colo.jasontally.com   median 0.0300 ms   0.60% of the 5 ms budget
+```
+
+### Minification
+
+`snippet.js` is the readable source and is what the tests import.
+`deploy.sh` minifies it with [esbuild](https://esbuild.github.io/) and uploads
+the result, because the 32768 byte limit applies to what Cloudflare stores.
+
+```
+26312 bytes -> 14852 bytes, 43% smaller, 17916 free of 32768
+```
+
+Four builds were measured on this file. All four passed all 45 tests.
+
+| Build | Bytes | Time |
+| --- | --- | --- |
+| esbuild, `--minify` | 14874 | 1.6 s |
+| terser, `--compress --mangle` | 14992 | 2.0 s |
+| terser, `passes=3` | 14979 | 2.0 s |
+| terser, all `unsafe_*` transforms | 14848 | 2.0 s |
+
+esbuild is the default. The 26 byte difference against terser with every
+`unsafe_*` transform enabled is 0.08% of the limit, and those transforms can
+change behaviour, so esbuild is the safer build. Set `MINIFY` to switch:
+
+```console
+$ MINIFY='sfw npx --yes terser' ./deploy.sh
+```
+
+Minifying does not change run time. V8 parses once per isolate and then works
+from bytecode either way.
+
+```console
+$ npm run bench:runtime
+source 26312 bytes, minified 14874 bytes
+  colo.jasontally.com      source 0.0208 ms   minified 0.0210 ms
+  ip.jasontally.com        source 0.0201 ms   minified 0.0203 ms
 ```
 
 A wildcard rule would remove the 4096 character limit, but it is not usable
@@ -240,12 +345,19 @@ has as a plain link next to the map.
 
 ```console
 npm i -g cf
-read -rs -p "Cloudflare API token: " CF && CLOUDFLARE_API_TOKEN="$CF" ./deploy.sh
+export CLOUDFLARE_API_TOKEN=<token>
+export CLOUDFLARE_ZONE_ID=b540f8f1930727dace12f79100e7b9d2
+./deploy.sh
 ```
 
-`deploy.sh` reads the host list out of `snippet.js`, creates any missing DNS
-records, uploads the code, and puts the rule in place. It is safe to run again,
-and it will not touch other Snippet rules in the zone.
+`deploy.sh` checks the token first, minifies the source, reads the host list out
+of `snippet.js`, creates any missing DNS records, uploads the code, and puts the
+rule in place. It is safe to run again, and it will not touch other Snippet
+rules in the zone.
+
+It stops before sending anything if the rule expression would pass 4096
+characters, and it confirms by hash that the code on the edge is the build it
+sent.
 
 `cf auth login` also works. It stores a credential in your keyring and needs
 no token in the environment.
@@ -332,4 +444,5 @@ network and no edge. Measure the real end to end time after deploy.
 | `deploy.sh`           | DNS, code and rule deployment through `cf` |
 | `bench.mjs`           | byte and header check against icanhazip.com |
 | `cost.mjs`            | measures size, rule size and execution time |
-| `test/snippet.test.js`| checks for both response shapes            |
+| `runtime.mjs`         | compares the source and minified run time   |
+| `test/snippet.test.js`| checks every response shape                |

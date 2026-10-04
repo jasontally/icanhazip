@@ -3,6 +3,7 @@
 // Run with: node --test test/
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import snippet, { hostLabels } from "../snippet.js";
@@ -144,14 +145,7 @@ test("no coordinates means no map and no Leaflet", async () => {
 	assert.match(body, /&mdash;<\/span>/);
 });
 
-test("hostile coordinates cannot break out of the script block", async () => {
-	const body = await (
-		await call("https://ip.jasontally.com/whoami", {
-			cf: { ...CF, latitude: "30.2);alert(1);//", longitude: "-97.7" },
-		})
-	).text();
-
-	test("ipv4, ipv6, v4 and v6 are synonyms of ip4 and ip6", async () => {
+test("ipv4, ipv6, v4 and v6 are synonyms of ip4 and ip6", async () => {
 	const v4 = { headers: { "CF-Connecting-IP": "203.0.113.7" } };
 	for (const host of ["ip4", "ipv4", "v4"]) {
 		assert.equal(await (await callHost(host, v4)).text(), "203.0.113.7\n", host);
@@ -166,6 +160,89 @@ test("hostile coordinates cannot break out of the script block", async () => {
 	}
 	for (const host of ["ip4", "ipv4", "v4"]) {
 		assert.equal(await (await callHost(host, v6)).text(), "\n", host);
+	}
+});
+
+test("hostile coordinates cannot break out of the script block", async () => {
+	const body = await (
+		await call("https://ip.jasontally.com/whoami", {
+			cf: { ...CF, latitude: "30.2);alert(1);//", longitude: "-97.7" },
+		})
+	).text();
+
+	// Pull out the last inline script, which is the map code. The coordinates
+	// may appear elsewhere as escaped text, which is fine.
+	const script = body.slice(body.lastIndexOf("<script>"), body.lastIndexOf("</script>"));
+
+	// Nothing from the coordinates may reach the script as code. Number()
+	// drops the injected text, so Leaflet gets a real number or NaN.
+	assert.doesNotMatch(script, /alert\(1\)/);
+	assert.match(script, /setView\(\[NaN, -97\.7\], 5\)/);
+	assert.match(script, /circleMarker\(\[NaN, -97\.7\]/);
+	// The popup label is built from those numbers, so it cannot carry the text.
+	assert.match(script, /\.bindPopup\("NaN, -97\.7"\)/);
+});
+
+test("the date and time hosts split the ISO timestamp", async () => {
+	const expected = {
+		date: /^\d{4}-\d{2}-\d{2}\n$/,
+		time: /^\d{2}:\d{2}:\d{2}\n$/,
+		utc: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\n$/,
+		year: /^\d{4}\n$/,
+		month: /^\d{2}\n$/,
+		hour: /^\d{2}\n$/,
+		minute: /^\d{2}\n$/,
+		second: /^\d{2}\n$/,
+		epoch: /^\d{10}\n$/,
+	};
+	for (const [host, pattern] of Object.entries(expected)) {
+		const body = await (await callHost(host)).text();
+		assert.match(body, pattern, host);
+	}
+
+	// Every split must come from the same clock, so they must agree with utc.
+	const utc = (await (await callHost("utc")).text()).trim();
+	assert.equal(await (await callHost("date")).text(), `${utc.slice(0, 10)}\n`);
+	assert.equal(await (await callHost("time")).text(), `${utc.slice(11, 19)}\n`);
+	assert.equal(await (await callHost("day")).text(), `${utc.slice(0, 10)}\n`);
+	assert.equal(await (await callHost("clock")).text(), `${utc.slice(11, 19)}\n`);
+
+	// The epoch value must be the same moment, to within a second.
+	const epoch = Number((await (await callHost("epoch")).text()).trim());
+	assert.ok(Math.abs(epoch * 1000 - Date.parse(utc)) < 1000, "epoch must match utc");
+});
+
+test("the weather hosts read one field each from Open-Meteo", async () => {
+	// These are real subrequests, so only check they answer and never throw.
+	for (const host of [
+		"temp", "tempc", "celsius", "tempf", "fahrenheit", "feels", "humidity",
+		"wind", "clouds", "precip", "elevation", "elev", "sunrise", "sunset",
+		"wmo", "weather",
+	]) {
+		const body = await (await callHost(host)).text();
+		assert.match(body, /^[\x20-\x7e]*\n$/, `${host} must answer one printable line`);
+	}
+});
+
+test("weather needs coordinates and fails soft without them", async () => {
+	const none = { cf: { ...CF, latitude: undefined, longitude: undefined } };
+	for (const host of ["temp", "weather", "elevation", "sunrise"]) {
+		assert.equal(await (await callHost(host, none)).text(), "\n", host);
+	}
+});
+
+test("the weather code table covers every code Open-Meteo documents", async () => {
+	// A missing entry would make weather answer empty for a real condition.
+	// Read it through the module, not out of the source text, so this works
+	// against a minified build as well.
+	const { wmoCodes } = await import("../snippet.js");
+	const expected = [0, 1, 2, 3, 45, 48, 51, 53, 55, 56, 57, 61, 63, 65, 66,
+		67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 97, 99];
+
+	assert.deepEqual(Object.keys(wmoCodes).map(Number).sort((a, b) => a - b), expected);
+	for (const code of expected) {
+		assert.equal(typeof wmoCodes[code], "string", `code ${code} needs words`);
+		assert.ok(wmoCodes[code].length > 0, `code ${code} must not be blank`);
 	}
 });
 
@@ -220,19 +297,6 @@ test("the reverse DNS name builders handle both address families", async () => {
 		if (body.trim() === "") continue; // no PTR published, nothing to prove
 		assert.equal(body.trim(), expected, ip);
 	}
-});
-
-// Pull out the last inline script, which is the map code. The coordinates
-	// may appear elsewhere as escaped text, which is fine.
-	const script = body.slice(body.lastIndexOf("<script>"), body.lastIndexOf("</script>"));
-
-	// Nothing from the coordinates may reach the script as code. Number()
-	// drops the injected text, so Leaflet gets a real number or NaN.
-	assert.doesNotMatch(script, /alert\(1\)/);
-	assert.match(script, /setView\(\[NaN, -97\.7\], 5\)/);
-	assert.match(script, /circleMarker\(\[NaN, -97\.7\]/);
-	// The popup label is built from those numbers, so it cannot carry the text.
-	assert.match(script, /\.bindPopup\("NaN, -97\.7"\)/);
 });
 
 const callHost = async (host, options) => call(`https://${host}.jasontally.com/`, options);
@@ -344,6 +408,15 @@ assert.deepEqual([...hostLabels].sort(), [
 	"ns", "org", "postcode", "postal", "prefix", "proto", "province", "ptr",
 	"range", "ray", "cidr", "region", "rtt", "st", "state", "timezone", "tls",
 	"tz", "ua", "useragent", "utc", "v4", "v6", "ver", "zip", "zipcode",
+
+	// Date and time splits.
+	"date", "day", "today", "utcdate", "time", "utctime", "clock", "now",
+	"year", "month", "hour", "minute", "second", "epoch", "timestamp",
+
+	// Weather.
+	"temp", "tempc", "celsius", "tempf", "fahrenheit", "feels", "humidity",
+	"wind", "clouds", "precip", "elevation", "elev", "sunrise", "sunset",
+	"wmo", "weather",
 ].sort());
 });
 

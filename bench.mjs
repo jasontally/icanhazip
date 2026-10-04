@@ -80,17 +80,27 @@ console.log("\npaths that must answer with the plain address");
 console.log("\nsubdomains, checked against the live site");
 {
 	// Cloudflare sends these for every proxied request, so they must not be
-	// empty. The rest may legitimately be empty: curl sends no Accept-Language,
-	// Cloudflare sends no JA3 or JA4 for most requests, ip4 and ip6 are one
-	// or the other, and a DNS host is empty when no record is published.
+	// empty. Everything else must be a line, but the line may be empty.
 	const alwaysPresent = new Set([
 		"ip", "city", "zip", "country", "region", "colo", "asn", "as", "http",
 		"geo", "latlong", "latitude", "longitude", "ver", "utc", "st",
+		"date", "time", "year", "month", "hour", "minute", "second", "epoch",
 	]);
 
 	// These hosts answer with a page, not a single value, so they are checked
 	// for content type and shape instead of for a one line body.
 	const pages = new Set(["map"]);
+
+	// These reach a third party over the network, so they are slower and a slow
+	// or down service is allowed to answer empty. They must still answer a
+	// line. Only the pause is needed, the pass rule below does not use this.
+	const slow = new Set([
+		"ptr", "hostname", "ns", "nameserver", "net", "netname", "netblock",
+		"range", "cidr", "prefix", "bgp", "dns",
+		"temp", "tempc", "celsius", "tempf", "fahrenheit", "feels", "humidity",
+		"wind", "clouds", "precip", "elevation", "elev", "sunrise", "sunset",
+		"wmo", "weather",
+	]);
 
 	for (const label of hostLabels) {
 		if (label === "ip") continue;
@@ -117,7 +127,9 @@ console.log("\nsubdomains, checked against the live site");
 			continue;
 		}
 		const oneLine = /^[\x20-\x7e]*\n$/.test(body);
-		const filled = alwaysPresent.has(label) ? body.trim().length > 0 : true;
+		// Cloudflare sends these for every request, so an empty answer means
+		// something broke. Every other host may legitimately be empty.
+		const filled = !alwaysPresent.has(label) || body.trim().length > 0;
 		check(
 			live.status === 200 &&
 				live.headers.get("content-type") === "text/plain" &&
@@ -126,7 +138,7 @@ console.log("\nsubdomains, checked against the live site");
 			`${label}.jasontally.com`,
 			`${live.status} ${JSON.stringify(body.trim())}`,
 		);
-		await sleep(100);
+		await sleep(slow.has(label) ? 400 : 100);
 	}
 }
 

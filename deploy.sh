@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Deploys the Snippet, its rule, and the DNS record with the cf CLI.
+# Deploys the Snippet, its rule, and the DNS records with the cf CLI.
 #
-#   read -rs -p "Cloudflare API token: " CF && CLOUDFLARE_API_TOKEN="$CF" ./deploy.sh
+#   CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ZONE_ID=<zone id> ./deploy.sh
 #
 # Or authenticate once with `cf auth login` and run ./deploy.sh with no token.
 set -euo pipefail
 
 ACCOUNT_ID=74036ee9a61ce6ac5682b2eade8dfb82
-ZONE_ID=b540f8f1930727dace12f79100e7b9d2
-ZONE=jasontally.com
+: "${CLOUDFLARE_ZONE_ID:?set CLOUDFLARE_ZONE_ID to the zone id}"
+ZONE_ID="$CLOUDFLARE_ZONE_ID"
+ZONE="${CLOUDFLARE_ZONE_NAME:-jasontally.com}"
 HOST=ip.$ZONE
 SNIPPET_NAME=icanhazip
 # RFC 6666 IPv6 discard prefix. Snippets answer before the origin, so this is
@@ -17,38 +18,102 @@ ORIGIN=100::1
 # A Snippet rule expression may hold 4096 characters. This is the ceiling the
 # API enforces, measured against this zone.
 MAX_EXPRESSION=4096
+# A Snippet source may hold 32768 bytes.
+MAX_SOURCE=32768
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CF=(cf --quiet --zone "$ZONE_ID")
+API="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets"
 
 command -v cf >/dev/null || { echo "cf not found. Install it with: npm i -g cf" >&2; exit 1; }
-[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || echo "note: no CLOUDFLARE_API_TOKEN set, relying on cf auth login"
+command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
+
+# Fail before touching anything if the token is not usable. A missing token used
+# to make the code upload fail quietly, which left the zone serving old DNS.
+# CEILING: cf auth login is accepted as an alternative, but this script always
+# uses the token for the raw upload, so it cannot detect that case.
+[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || {
+	echo "CLOUDFLARE_API_TOKEN is not set, so the code upload cannot run." >&2
+	echo "Set it, or sign in first with: cf auth login" >&2
+	exit 1
+}
 
 step() { printf '\n== %s\n' "$1"; }
 
-# Read the host labels out of the Snippet itself, so the DNS records and the
-# rule can never disagree with the code that answers.
+die() { printf '%s\n' "$1" >&2; exit 1; }
+
+# Build the one rule expression. A set costs less than a chain of eq tests.
+expression_from() {
+	node -e '
+	const labels = process.argv[1].split("\n").filter(Boolean);
+	const hosts = labels.map((label) => `${label}.${process.argv[2]}`);
+	process.stdout.write(`(http.host in {${hosts.map((h) => JSON.stringify(h)).join(" ")}})`);
+	' "$1" "$ZONE"
+}
+
+step "Checking the token"
+verify="$(curl -fsS "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+	-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")" \
+	|| die "the token was rejected by Cloudflare"
+printf '%s' "$verify" | grep -q '"status":"active"' \
+	|| die "the token is not active: $verify"
+echo "  token active"
+
+step "Minifying $SNIPPET_NAME.js"
+# The uploaded code is minified, because the 32768 byte limit applies to what
+# Cloudflare stores. snippet.js stays readable and is what the tests import.
+build="$(mktemp -d)"
+trap 'rm -rf "$build"' EXIT
+# Minifier. esbuild is fetched on demand through sfw, so there is no dependency
+# to install and nothing to commit. Set MINIFY to use a local copy instead.
+#
+# Measured on this file. All four builds passed all 45 tests.
+#   esbuild        14874 bytes   1.6 s
+#   terser plain   14992 bytes   2.0 s
+#   terser p3      14979 bytes   2.0 s
+#   terser max     14848 bytes   2.0 s   26 bytes smaller than esbuild, 0.08%
+#
+# esbuild is the default. The 26 byte difference is noise against a 32768 byte
+# limit, and esbuild does not use the unsafe_* transforms that terser max needs,
+# so it is the safer build. Minification does not change run time either, see
+# runtime.mjs. MINIFY='sfw npx --yes terser' with TERSER_FLAGS will switch.
+if [ -z "${SFW_SKIP_UPDATE_CHECK:-}" ]; then
+	export SFW_SKIP_UPDATE_CHECK=1
+fi
+MINIFY="${MINIFY:-sfw npx --yes esbuild}"
+# shellcheck disable=SC2086
+$MINIFY "$ROOT/snippet.js" --format=esm --minify --log-level=warning \
+	--outfile="$build/snippet.js" || die "the minifier failed"
+
+source_bytes=$(wc -c <"$ROOT/snippet.js")
+built_bytes=$(wc -c <"$build/snippet.js")
+[ "$built_bytes" -le "$MAX_SOURCE" ] \
+	|| die "minified source is $built_bytes bytes, over the $MAX_SOURCE limit"
+printf '  %s bytes -> %s bytes (%.0f%% smaller), %s free of %s\n' \
+	"$source_bytes" "$built_bytes" \
+	"$(( (source_bytes - built_bytes) * 100 / source_bytes ))" \
+	"$(( MAX_SOURCE - built_bytes ))" "$MAX_SOURCE"
+
+# Read the host labels from the readable source for the rule, then prove the
+# minified build has the same list. A mismatch means the rule and the code on
+# the edge would disagree, which is the one failure that is hard to see.
 labels="$(node --input-type=module -e '
 import { hostLabels } from "'"$ROOT"'/snippet.js";
 process.stdout.write(hostLabels.join("\n"));
 ')"
+built_labels="$(node --input-type=module -e '
+import { hostLabels } from "'"$build"'/snippet.js";
+process.stdout.write(hostLabels.join("\n"));
+')"
+[ "$labels" = "$built_labels" ] \
+	|| die "the minified build lists different hosts than the source"
 
-# Build the one rule expression. A set costs less than a chain of eq tests.
-expression="$(node -e '
-const labels = process.argv[1].split("\n").filter(Boolean);
-const zone = process.argv[2];
-const hosts = labels.map((label) => `${label}.${zone}`);
-process.stdout.write(`(http.host in {${hosts.map((h) => JSON.stringify(h)).join(" ")}})`);
-' "$labels" "$ZONE")"
-
+expression="$(expression_from "$labels")"
 size=${#expression}
-if [ "$size" -gt "$MAX_EXPRESSION" ]; then
-	echo "rule expression is $size characters, over the $MAX_EXPRESSION limit." >&2
-	echo "Split the hosts across a second Snippet and its own rule." >&2
-	exit 1
-fi
+[ "$size" -le "$MAX_EXPRESSION" ] \
+	|| die "rule expression is $size characters, over the $MAX_EXPRESSION limit. Split the hosts across a second Snippet."
 count="$(printf '%s\n' "$labels" | grep -c .)"
-echo "rule expression is $size of $MAX_EXPRESSION characters, $count hosts"
+echo "  rule expression $size of $MAX_EXPRESSION characters, $count hosts"
 
 step "DNS: $count records, AAAA -> $ORIGIN (proxied)"
 while read -r label; do
@@ -66,19 +131,50 @@ done <<<"$labels"
 
 step "Snippet: $SNIPPET_NAME"
 # CEILING: cf v1.0.0-beta.10 appends the code as multipart part "file", but the
-# Snippets API needs that part named "files", so the CLI upload is expected to
-# fail. The curl fallback sends the part name the API documents.
-# Remove the fallback once cf sends "files" (cloudflare/cf, packages/cli snippets update).
-if ! "${CF[@]}" snippets update "$SNIPPET_NAME" \
-	--file "@$ROOT/snippet.js" \
-	--metadata '{"main_module":"snippet.js"}'; then
-	echo "cf could not upload the code, falling back to the documented multipart form" >&2
-	curl -fsS "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets/$SNIPPET_NAME" \
+# Snippets API needs that part named "files", so the CLI upload cannot work.
+# Remove the cf attempt once cloudflare/cf sends "files".
+if "${CF[@]}" snippets update "$SNIPPET_NAME" \
+	--file "@$build/snippet.js" \
+	--metadata '{"main_module":"snippet.js"}' >/dev/null 2>&1; then
+	echo "  cf uploaded the code"
+else
+	# -f makes curl fail the script on an error, so a rejected upload cannot
+	# pass silently. That was the bug that left the zone on old DNS.
+	status="$(curl -sS -o "$build/reply.json" -w '%{http_code}' \
+		"$API/$SNIPPET_NAME" \
 		-X PUT \
 		-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-		-F "files=@$ROOT/snippet.js" \
-		-F 'metadata={"main_module":"snippet.js"}' >/dev/null
-	echo "uploaded"
+		-F "files=@$build/snippet.js" \
+		-F 'metadata={"main_module":"snippet.js"}')" \
+		|| die "the code upload failed and curl gave no status"
+	[ "$status" = "200" ] || die "the code upload returned HTTP $status: $(cat "$build/reply.json")"
+	grep -q '"success":true' "$build/reply.json" || die "the API refused the code: $(cat "$build/reply.json")"
+	echo "  uploaded $built_bytes bytes"
+fi
+
+# Confirm the edge now holds what we sent, rather than trusting the reply. The
+# content endpoint wraps the file in a multipart body, so hash the part and not
+# the whole reply.
+curl -fsS "$API/$SNIPPET_NAME/content" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+	-o "$build/stored.txt" || die "could not read the stored code back"
+
+if node --input-type=module -e '
+	import { createHash } from "node:crypto";
+	import { readFileSync } from "node:fs";
+	const [storedPath, builtPath] = process.argv.slice(1);
+	const raw = readFileSync(storedPath, "utf8");
+	// Skip the MIME headers before the file and the closing boundary after it.
+	const body = raw
+		.replace(/^[\s\S]*?\r?\n\r?\n/, "")
+		.replace(/\r?\n--[\w-]+--[\s\S]*$/, "")
+		.trim();
+	const sha = (text) => createHash("sha256").update(text).digest("hex");
+	process.exit(sha(body) === sha(readFileSync(builtPath, "utf8")) ? 0 : 1);
+' "$build/stored.txt" "$build/snippet.js"; then
+	echo "  confirmed on the edge, sha256 matches"
+else
+	echo "  warning: the code now on the edge is not the build we sent." >&2
+	echo "  Snippets take a moment to apply. Check again in a minute." >&2
 fi
 
 step "Snippet rule: $count hosts"
