@@ -129,6 +129,47 @@ while read -r label; do
 	printf '  %-24s created\n' "$name"
 done <<<"$labels"
 
+step "DNS: removing records for hosts the Snippet no longer serves"
+# A host removed from the maps must lose its DNS record too, or the name keeps
+# resolving and returns a Cloudflare error for ever. This deletes only records
+# that are unmistakably ours: a single-label name under the zone, type AAAA,
+# pointing at the discard prefix. Any other record in the zone is left alone.
+current="$(printf '%s\n' "$labels" | grep . | sort)"
+stale="$("${CF[@]}" dns records list --type AAAA | node -e '
+const records = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const zone = process.argv[1];
+const origin = process.argv[2];
+const keep = new Set(process.argv[3].split("\n"));
+const suffix = "." + zone;
+for (const record of records) {
+	if (record.type !== "AAAA" || record.content !== origin) continue;
+	const name = record.name;
+	// One label under the zone only. Not @, not a subdomain, not *.zone.
+	if (!name.endsWith(suffix)) continue;
+	const label = name.slice(0, name.length - suffix.length);
+	if (label.length === 0 || label.includes(".")) continue;
+	if (keep.has(label)) continue;
+	process.stdout.write(`${record.id} ${name}\n`);
+}
+' "$ZONE" "$ORIGIN" "$current")"
+if [ -z "$stale" ]; then
+	echo "  none"
+else
+	while read -r id name; do
+		[ -n "$id" ] || continue
+		# --force is required. Without it cf asks for confirmation, aborts in
+		# a script, and still exits 0, so the record survived while this said
+		# "removed". Confirm the record is gone rather than trusting the exit.
+		"${CF[@]}" dns records delete --force "$id" >/dev/null 2>&1 || true
+		left="$("${CF[@]}" dns records list --name "$name" --type AAAA \
+			| grep -c '"id"' || true)"
+		if [ "${left:-0}" -gt 0 ]; then
+			die "$name is not in the Snippet, and its DNS record would not delete"
+		fi
+		printf '  %-24s removed\n' "$name"
+	done <<<"$stale"
+fi
+
 step "Snippet: $SNIPPET_NAME"
 # CEILING: cf v1.0.0-beta.10 appends the code as multipart part "file", but the
 # Snippets API needs that part named "files", so the CLI upload cannot work.

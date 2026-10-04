@@ -27,11 +27,28 @@ const CF = {
 	network: "IPN",
 	tlsVersion: "TLSv1.3",
 	tlsCipher: "AEAD-AES128-GCM-SHA256",
-	tlsJa3Hash: "e7d705a3286e19ea42f587b344ee6865",
 	clientTcpRtt: 12,
 	ip: "203.0.113.7",
 	botManagement: { score: 1, verifiedBots: [] },
 };
+
+// The keys request.cf really carried on this zone, dumped from the edge on
+// 4 October 2026. 32 keys, no more. This exists because the fixture above
+// once invented a tlsJa3Hash key, which let the ja3 and ja4 tests pass while
+// both hosts answered empty in production for every visitor. A field that is
+// not in this list does not reach a Snippet on this plan.
+//
+// Regenerate with the request.cf block at https://colo.jasontally.com/whoami
+const REAL_CF_KEYS = [
+	"asOrganization", "asn", "botManagement", "city", "clientQuicRtt",
+	"clientTcpRtt", "colo", "continent", "country", "edgeL4",
+	"edgeRequestKeepAliveStatus", "httpProtocol", "isEUCountry", "latitude",
+	"longitude", "metroCode", "postalCode", "region", "regionCode",
+	"requestHeaderNames", "requestPriority", "timezone", "tlsCipher",
+	"tlsClientAuth", "tlsClientCiphersSha1", "tlsClientExtensionsSha1",
+	"tlsClientExtensionsSha1Le", "tlsClientHelloLength", "tlsClientRandom",
+	"tlsExportedAuthenticator", "tlsVersion", "verifiedBotCategory",
+];
 
 const call = async (url, { cf = CF, headers = {}, method = "GET" } = {}) => {
 	const request = new Request(url, { method, headers });
@@ -159,16 +176,14 @@ test("xff reports the chain a proxy declared, empty when there is none", async (
 	assert.equal(await chain.text(), "203.0.113.9, 198.51.100.7\n");
 });
 
-test("warp and gateway are present but empty, a known ceiling", async () => {
-	// Cloudflare knows these two and request.cf carries neither. A Snippet
-	// cannot read /cdn-cgi/trace because fetch() is an origin request. They
-	// stay in the rule so they answer empty rather than 404, which is honest.
-	for (const host of ["warp", "gateway"]) {
-		const response = await callHost(host);
-		assert.equal(response.status, 200, host);
-		assert.equal(response.headers.get("content-type"), "text/plain", host);
-		assert.equal(await response.text(), "\n", host);
-	}
+test("warp and gateway are gone, because a Snippet cannot read them", () => {
+	// Cloudflare knows both, and reports both at /cdn-cgi/trace, but a
+	// Snippet's fetch() is an origin request and this origin is 100::1 with
+	// nothing behind it. The hosts were removed rather than left answering
+	// empty, because a name that always returns nothing is worse than no name.
+	// The whoami page links the trace, which is where a browser can read them.
+	assert.ok(!hostLabels.includes("warp"), "warp must not be in the rule");
+	assert.ok(!hostLabels.includes("gateway"), "gateway must not be in the rule");
 });
 
 test("the whoami page links the edge trace, for the fields it cannot show", async () => {
@@ -455,9 +470,9 @@ test("a subdomain with no data answers with an empty line, never the IP", async 
 });
 
 test("a missing field never looks like the visitor IP", async () => {
-	// curl sends no Accept-Language, and Cloudflare sends no JA3 for most
-	// requests. Both must read as empty, not as the caller's address.
-	for (const host of ["lang", "ja3", "ja4", "tls", "colo"]) {
+	// curl sends no Accept-Language, and a request with no request.cf carries
+	// no location. Both must read as empty, not as the caller's address.
+	for (const host of ["lang", "tls", "colo"]) {
 		const body = await (await callHost(host, { cf: {} })).text();
 		assert.equal(body, "\n", host);
 		assert.doesNotMatch(body, /203\.0\.113\.7/, host);
@@ -488,8 +503,8 @@ test("hostLabels lists every host in the maps, for the Snippet rule", () => {
 assert.deepEqual([...hostLabels].sort(), [
 	"as", "asn", "bgp", "bot", "cc", "cipher", "city", "co", "colo",
 	"continent", "country", "countrycode", "dns", "dma", "edge", "eu", "geo",
-	"hostname", "http", "ip", "ip4", "ip6", "ipv4", "ipv6", "isp", "ja3",
-	"ja4", "lang", "lat", "latitude", "latlng", "latlon", "latlong", "lon",
+	"hostname", "http", "ip", "ip4", "ip6", "ipv4", "ipv6", "isp",
+	"lang", "lat", "latitude", "latlng", "latlon", "latlong", "lon",
 	"longitude", "map", "metro", "nameserver", "net", "netblock", "netname",
 	"ns", "org", "postcode", "postal", "prefix", "proto", "province", "ptr",
 	"range", "ray", "cidr", "region", "rtt", "st", "state", "timezone", "tls",
@@ -505,7 +520,7 @@ assert.deepEqual([...hostLabels].sort(), [
 	"wmo", "weather",
 
 	// Replacements for the services Major Hayden retired in August 2022.
-	"headers", "proxy", "proxies", "xff", "warp", "gateway",
+	"headers", "proxy", "proxies", "xff",
 ].sort());
 });
 
@@ -625,18 +640,53 @@ test("ua is empty when the client sends no user agent", async () => {
 	assert.equal(await (await callHost("ua")).text(), "\n");
 });
 
-test("ja3 and ja4 read the TLS fingerprints, and are empty when absent", async () => {
-	const withHashes = await callHost("ja3", {
-		cf: { ...CF, tlsJa3Hash: "e7d705a3286e19ea", tlsJa4: "t13d1516h2_8daa" },
-	});
-	assert.equal(await withHashes.text(), "e7d705a3286e19ea\n");
-	assert.equal(await (await callHost("ja4", {
-		cf: { ...CF, tlsJa3Hash: "e7d705a3286e19ea", tlsJa4: "t13d1516h2_8daa" },
-	})).text(), "t13d1516h2_8daa\n");
+test("every field a host reads really exists in request.cf", () => {
+	// The guard that should have caught ja3 and ja4. Both read a field that
+	// Cloudflare does not put in request.cf on this plan, so both always
+	// answered empty, and their own tests passed because the fixture invented
+	// the field. One check here covers every host, present and future.
+	const src = readFileSync(new URL("../snippet.js", import.meta.url), "utf8");
+	const body = src.slice(
+		src.indexOf("const HOSTS = {"),
+		src.indexOf("\n};", src.indexOf("const HOSTS = {")),
+	);
+	const real = new Set(REAL_CF_KEYS);
+	// HEADER_FIELDS is read from the source rather than repeated here, so this
+	// check follows the snippet if a host moves from a header to request.cf.
+	const headerBlock = src.slice(src.indexOf("const HEADER_FIELDS = new Set(["));
+	const headers = new Set(
+		[...headerBlock.slice(0, headerBlock.indexOf("]);")).matchAll(/"([^"]+)"/g)]
+			.map((m) => m[1]),
+	);
+	assert.equal(headers.size, 4, "HEADER_FIELDS did not parse, so this check is blind");
 
-	// Cloudflare sends no JA3 for most requests, so this host is often empty.
-	const none = await callHost("ja3", { cf: { ...CF, tlsJa3Hash: undefined } });
-	assert.doesNotMatch(await none.text(), /e7d705a3/);
+	const read = [];
+	for (const [, label, list] of body.matchAll(
+		/^\t([A-Za-z0-9_]+):\s*\[([^\]]*)\]/gm,
+	)) {
+		for (const raw of list.split(",")) {
+			const path = raw.trim().replace(/"/g, "");
+			if (path) read.push([label, path]);
+		}
+	}
+	assert.ok(read.length > 40, `only found ${read.length} reads to check`);
+
+	const invented = read.filter(
+		([, path]) => !headers.has(path) && !real.has(path.split(".")[0]),
+	);
+	assert.deepEqual(
+		invented.map(([label, path]) => `${label} reads request.cf.${path}`),
+		[],
+		"a host reads a field Cloudflare does not send, so it always answers empty",
+	);
+});
+
+test("ja3 and ja4 are gone, because this plan does not send them", () => {
+	// request.cf on this plan carries no JA3 or JA4 key. The hashes of the
+	// ClientHello parts do exist and are the ingredients of a JA3 hash, but
+	// Cloudflare publishes the parts and not the hash.
+	assert.ok(!hostLabels.includes("ja3"), "ja3 must not be in the rule");
+	assert.ok(!hostLabels.includes("ja4"), "ja4 must not be in the rule");
 });
 
 test("the IP comes from CF-Connecting-IP and falls back to request.cf", async () => {

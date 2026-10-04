@@ -342,8 +342,11 @@ const HOSTS = {
 	ua: ["User-Agent"],
 	useragent: ["User-Agent"],
 	lang: ["Accept-Language"],
-	ja3: ["tlsJa3Hash"],
-	ja4: ["tlsJa4"],
+	// ja3 and ja4 were here and both always answered empty. request.cf on
+	// this plan carries no JA3 or JA4 key at all, so there was nothing to
+	// read. The hashes of the ClientHello parts do exist, and they are the
+	// ingredients a JA3 hash is built from, but Cloudflare does not publish
+	// the hash itself. See the README for what those fields give instead.
 	state: ["region", "regionCode"],
 	province: ["region", "regionCode"],
 };
@@ -450,11 +453,6 @@ const DERIVED = {
 	// The chain a proxy declared, left to right. Cloudflare does not add this
 	// header of its own, so it is empty unless something upstream sent one.
 	xff: (request) => request.headers.get("x-forwarded-for") ?? "",
-	// Cloudflare knows these two, but a Snippet cannot read where it knows
-	// them from. Always empty, and that is a real ceiling rather than a
-	// missing field. See the note beside the JSON hosts below.
-	warp: () => "",
-	gateway: () => "",
 };
 
 // Replacements for the services Major Hayden retired in August 2022. His
@@ -494,18 +492,6 @@ const JSON_HOSTS = {
 	proxy: proxyReport,
 	proxies: proxyReport,
 };
-
-// CEILING: a Snippet cannot read /cdn-cgi/trace, so warp and gateway always
-// answer empty. Cloudflare serves that path to a browser, but a Snippet's
-// fetch() is an origin request, and this zone's origin is 100::1 with nothing
-// behind it. A guard that returned fetch(request) for /cdn-cgi/ was tried and
-// made it worse, because that replaced Cloudflare's internal response with the
-// same dead origin fetch.
-//
-// Two upgrade paths. Cloudflare's Ruleset Engine exposes warp, gateway and rbi
-// as http.request.cf.* fields, so a Transform Rule could act on them, though
-// not a Snippet. Failing that, a second zone with no Snippet rule would let
-// fetch() reach /cdn-cgi/trace on Cloudflare rather than an origin.
 
 // WMO weather interpretation codes, the standard table Open-Meteo documents.
 // A number is not useful on its own, so weather turns it into words.

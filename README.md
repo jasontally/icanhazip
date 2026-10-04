@@ -9,7 +9,7 @@ $ curl https://ip.jasontally.com/
 203.0.113.7
 ```
 
-104 subdomains, one data point each. `city` gives the city, `colo` the Cloudflare
+100 subdomains, one data point each. `city` gives the city, `colo` the Cloudflare
 data centre, `ptr` the reverse DNS name, `temp` the temperature.
 
 ## Behaviour
@@ -44,7 +44,7 @@ $ echo "You appear to be in $(curl -s https://city.jasontally.com/)"
 You appear to be in Melbourne
 ```
 
-### Straight from Cloudflare, 42 hosts, no network call
+### Straight from Cloudflare, 40 hosts, no network call
 
 | Host | Value | Field |
 | --- | --- | --- |
@@ -71,13 +71,17 @@ You appear to be in Melbourne
 | `ray` | Cloudflare Ray ID | `cf-ray` header |
 | `ua`, `useragent` | User agent | `User-Agent` header |
 | `lang` | Accepted languages | `Accept-Language` header |
-| `ja3`, `ja4` | TLS fingerprints | `tlsJa3Hash`, `tlsJa4` |
 | `ver` | `4` or `6` | computed |
 | `ip4`, `ipv4`, `v4` | The address, only for IPv4 | computed |
 | `ip6`, `ipv6`, `v6` | The address, only for IPv6 | computed |
 
 `region` falls back to the two letter code when the long name is missing, so it
 answers `FL` rather than nothing.
+
+`dma` is a second name for `metro` and it does not mean what the name suggests.
+A DMA is a Designated Market Area, the US television and radio geography, and
+`request.cf` carries no such field. Both names return Cloudflare's `metroCode`.
+They answer the same value, and neither is a DMA.
 
 ### The clock, 16 hosts, no network call
 
@@ -291,19 +295,17 @@ Google App Engine and nothing sends them any more. `xff` covers
 proxy declared. Cloudflare does not add that header itself, so it is empty
 unless something upstream sent one.
 
-### VPN and gateway detection, which does not work
+### VPN and gateway detection, which a Snippet cannot do
 
-| Host | Value |
-| --- | --- |
-| `warp` | always empty |
-| `gateway` | always empty |
+There are no `warp` or `gateway` hosts. They were built, then removed.
 
-**These two are a real ceiling, not a missing field.** Cloudflare knows whether
-a visitor is on WARP or Gateway, and it reports both at `/cdn-cgi/trace`:
+Cloudflare knows whether a visitor is on WARP or Gateway, and it reports both at
+`/cdn-cgi/trace`:
 
 ```console
-$ curl https://warp.jasontally.com/cdn-cgi/trace | grep warp
+$ curl https://colo.jasontally.com/cdn-cgi/trace | grep -E '^(warp|gateway)'
 warp=off
+gateway=off
 ```
 
 A Snippet cannot read that. `fetch()` inside a Snippet is an origin request, and
@@ -316,8 +318,9 @@ path. That made it worse, because it replaced Cloudflare's internal trace respon
 with the same dead origin fetch, and `/cdn-cgi/trace` stopped working for
 browsers too. The guard is gone.
 
-The hosts stay in the rule and answer empty rather than 404, so the names are
-reserved and a future method can fill them in. Two upgrade paths: Cloudflare's
+The names were removed rather than left answering empty, because a host that
+always returns nothing is worse than no host at all. Two upgrade paths remain:
+Cloudflare's
 Ruleset Engine exposes `warp`, `gateway` and `rbi` as `http.request.cf.*` fields,
 so a Transform Rule can act on them, though a Snippet still cannot read them.
 Failing that, a second zone with no Snippet rule would let `fetch()` reach
@@ -365,8 +368,9 @@ the IP address, so a missing field cannot pass for a result.
 | --- | --- |
 | `lang` | `curl` sends no `Accept-Language` |
 | `ua`, `useragent` | a bare client sends no user agent |
-| `ja3`, `ja4` | Cloudflare sends fingerprints for some requests only |
+| `xff` | no proxy sent `X-Forwarded-For` |
 | `ip4`, `ipv4`, `v4` | empty for an IPv6 visitor, and the reverse for `ip6` |
+| `ip6`, `ipv6`, `v6` | empty for an IPv4 visitor, and the reverse for `ip4` |
 | `dns` | the PTR record has no forward record |
 | `ptr`, `ns`, `net`, `prefix` | the address has no such record |
 | weather hosts | Open-Meteo did not return the field |
@@ -376,13 +380,106 @@ $ [ -n "$(curl -s https://lang.jasontally.com/)" ] && echo browser || echo "no l
 no language sent
 ```
 
+## How dependable each host is
+
+The table above says which hosts can be empty. This says which ones are,
+measured rather than guessed.
+
+```console
+npm run reliability                        # every host, 12 samples
+node reliability.mjs 40 6 prefix,bgp,cidr  # one group, 40 samples
+```
+
+The tool asks each host N times and records failures, blanks, how many
+different answers came back, and the latency including the worst single
+sample. It checks its own group list against `snippet.js` on every run, so a
+host cannot be added without being classified.
+
+### The result: nothing fails
+
+Across 1200 requests, one per host per sample, **there were no failures at
+all**. 95 of the 100 hosts answered every sample with a value. Five never did,
+and in all five the empty answer is the correct one:
+
+| Host | Why empty every time |
+| --- | --- |
+| `ip6`, `ipv6`, `v6` | the probe runs over IPv4, and these answer only for IPv6 |
+| `xff` | no proxy sent `X-Forwarded-For`, and the probe sent none |
+| `dns` | the address has a PTR record but no forward record, which is the normal case |
+
+`dns` is the weakest of the five. It stays empty for most of the internet,
+because most networks publish a PTR record without a matching forward record.
+The name is honest, but it will rarely be useful.
+
+### Two hosts were broken and are gone
+
+The probe found `ja3` and `ja4` empty on all 12 samples, while `ja3` and `ja4`
+had been in the suite and passing the whole time.
+
+Both read a field Cloudflare never sends. `request.cf` on this zone has **32
+keys** and neither `tlsJa3Hash` nor `tlsJa4` is among them. Their tests passed
+because the fixture had invented the field, so each test proved only that the
+invented field was passed through.
+
+There is now one guard test that compares every field a host reads against the
+real key list, so this class of bug fails the suite instead of production.
+
+### The fault that is left is a slow tail, not a failure
+
+No host returned an error. But the upstream groups have a long tail, measured
+over 40 samples each:
+
+| Group | Median | p95 | Worst single sample |
+| --- | --- | --- | --- |
+| `request.cf`, no upstream | 31 ms | 34 ms | 190 ms |
+| computed, no upstream | 28 ms | 39 ms | 123 ms |
+| `cloudflare-dns.com` | 34 ms | 120 ms | 311 ms |
+| `api.open-meteo.com` | 172 ms | 608 ms | 642 ms |
+| `stat.ripe.net` whois | 155 ms | 325 ms | **5955 ms** |
+| `stat.ripe.net` network-info | 153 ms | 254 ms | 1053 ms |
+
+**The whois hosts are the least dependable names here, and not because they
+fail.** A local host is 30 ms and never goes above 200 ms. A whois host is
+usually 155 ms, and one sample in forty took nearly six seconds. The median
+hides this completely, which is why the table carries the worst sample.
+
+`netblock` produced that six second sample. The cause is RIPE RIS, not the
+Snippet: the request leaves the Cloudflare edge, crosses to RIPE NCC, and waits
+in their queue. A Snippet has a 5 ms execution budget but no timeout budget,
+and no way to shorten a slow upstream.
+
+So the honest ranking of the 100 names, worst first:
+
+1. `netblock`, `range`, `cidr`, `net`, `netname`, `prefix`, `bgp` reach RIPE
+   and can stall for seconds. They always answer correctly.
+2. The 16 weather hosts reach Open-Meteo and sit near 600 ms at p95, steadily.
+3. `dns` answers empty for most of the internet.
+4. The 71 hosts that read Cloudflare's own data answer in about 30 ms and are
+   as dependable as the edge itself.
+
+### What is left of the TLS fingerprint
+
+Cloudflare sends no JA3 or JA4 hash here, but it does send the parts a JA3 hash
+is computed from, and every one of them has a value:
+
+| Field | Example |
+| --- | --- |
+| `tlsClientCiphersSha1` | `hCCNuWP9ky6AR69i97wdKYbhFQo=` |
+| `tlsClientExtensionsSha1` | `4oF0LRxQXUDhrRY0MazQAVJh7Go=` |
+| `tlsClientExtensionsSha1Le` | `Ea9swA+X7+AQtmDnJ28MlyPK/Fg=` |
+| `tlsClientHelloLength` | `1570` |
+
+These are stable for one client software and differ between client software, so
+they fingerprint a browser the way a JA3 hash would, in two halves rather than
+one. They are not exposed as hosts today. Adding them is a small change and a
+judgement call, because a hash of the ciphers is not a hash of the browser.
+
 ## Where the values come from
 
 | Source | Hosts | Third party sees the visitor | Rate limited |
 | --- | --- | --- | --- |
-| `request.cf` | 42 | no | no |
+| `request.cf` | 40 | no | no |
 | request headers | 4 | no | no |
-| `/cdn-cgi/trace`, unreachable | 2 | no | no |
 | `new Date()` | 16 | no | no |
 | computed in the handler | 11 | no | no |
 | `cloudflare-dns.com` | 5 | no, stays inside Cloudflare | no |
@@ -390,22 +487,28 @@ no language sent
 | `api.open-meteo.com` | 16 | yes, Open-Meteo in Switzerland | 10,000 a day on the free tier |
 | unpkg.com, tile.openstreetmap.org | `map` and `/whoami` | yes, for the page only | tiles: none published, may be withdrawn |
 
-81 of the 104 never leave Cloudflare. 23 reach a third party, 2 cannot reach
-the trace endpoint at all, and 1 returns a page. The five DNS hosts are not rate limited and are the most reliable of the
-group, since they run on Cloudflare's own resolver in the same network as the
-Snippet itself.
+71 of the 100 never leave Cloudflare. 28 reach a third party, and 1 returns a
+page. The five DNS hosts are not rate limited and are the most dependable of the
+third party group, since they run on Cloudflare's own resolver in the same
+network as the Snippet itself.
 
-`request.cf` carries 59 fields. Those 42 hosts cover the ones people ask for by
-name. Of the other 17, most are TLS handshake transcripts, certificate blobs,
-`tlsExportedAuthenticator`, `edgeL4`, `requestPriority` and
-`verifiedBotCategory`. None has a common name, so no host holds them.
+**`request.cf` carries 32 keys on this plan, not more.** That was measured from
+the live edge, not taken from the documentation, and the number matters: 40 of
+those keys are named things, and the rest are TLS handshake transcripts,
+certificate blobs, `tlsExportedAuthenticator`, `edgeL4`, `requestPriority` and
+`verifiedBotCategory`. None of the rest has a common name, so no host holds them.
+There is no JA3 or JA4 key either, which is why those two hosts are gone.
+
+The four `tlsClient*` hash fields are the exception worth naming. They have no
+common name but they do fingerprint a client, and their values are in the
+"dependable" section above.
 
 Values are approximate. Cloudflare derives them from the network rather than a
 GPS fix, so `city` can land on the city centre and `zip` can be wrong.
 
 ## One Snippet, one rule
 
-All 104 hosts share one Snippet and one rule, written as a set test:
+All 100 hosts share one Snippet and one rule, written as a set test:
 
 ```
 (http.host in {"ip.jasontally.com" "city.jasontally.com" ...})
@@ -415,16 +518,24 @@ All 104 hosts share one Snippet and one rule, written as a set test:
 rule, and the code that answers cannot disagree. It also confirms that the
 minified build lists the same hosts before uploading.
 
+It creates records for hosts that are missing and **deletes records for hosts
+that are no longer in the list**, so a removed name stops resolving rather than
+sitting there failing. The delete only touches a single label under the zone
+with type AAAA pointing at the discard prefix, and it confirms the record is
+gone afterwards. That last part matters, because `cf dns records delete` asks
+for confirmation, aborts in a script and still exits 0, so the first version of
+this printed "removed" for records that were still there.
+
 ### What limits this, and which one binds first
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 16491 bytes | 32768 | 50% |
-| Rule expression | 2397 chars | 4096 | 59% |
+| Source size, as uploaded minified | 16430 bytes | 32768 | 50% |
+| Rule expression | 2308 chars | 4096 | 56% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
 The rule expression is the limit that binds. A rule holds 4096 characters and
-each host costs about 23, so one Snippet reaches roughly 175 hosts. At 104
+each host costs about 23, so one Snippet reaches roughly 175 hosts. At 100
 there is room for about 71 more, after which a second Snippet takes the
 overflow.
 
@@ -476,7 +587,7 @@ Create one at <https://dash.cloudflare.com/profile/api-tokens>:
 | Permission | Access | Why |
 | --- | --- | --- |
 | Zone / Snippets | Edit | upload the code and set the rule |
-| Zone / DNS | Edit | create the 104 AAAA records |
+| Zone / DNS | Edit | create the 100 AAAA records |
 | Zone / Zone | Read | let `cf` resolve the zone |
 
 Scope it to Zone `jasontally.com`. Account
@@ -511,7 +622,7 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-30176 bytes -> 16491 bytes, 45.4% smaller, 16277 free of 32768
+29533 bytes -> 16430 bytes, 44.4% smaller, 16338 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs
@@ -555,6 +666,18 @@ guard that stops a hostile coordinate reaching the script block, the `origin`
 Referrer-Policy that the tile policy needs, and the WMO table, which is read
 through the module so it also passes on a minified build.
 
+One test is worth naming. **Every field a host reads really exists in
+`request.cf`.** It compares the field names in the `HOSTS` map against the 32
+keys the live edge actually sent, and it reads the `HEADER_FIELDS` list out of
+the source rather than repeating it, so it follows the snippet.
+
+That test exists because `ja3` and `ja4` were broken on the live site for the
+whole life of the project and the suite was green the whole time. The fixture
+had invented the `tlsJa3Hash` key the host read, so the test proved only that
+the invented key was passed through. It was added after the reliability probe
+found both hosts empty on all 12 samples, and it now fails if any host reads a
+field Cloudflare does not send.
+
 ## Benchmark
 
 ```console
@@ -579,7 +702,7 @@ Two things differ from what icanhazip.com sends:
 icanhazip.com also sends `set-cookie`, `cf-ray`, `alt-svc` and `server`.
 Cloudflare adds most of those on its own.
 
-`bench.mjs` walks all 104 hosts against the live site too, so a host that stops
+`bench.mjs` walks all 100 hosts against the live site too, so a host that stops
 answering gets caught.
 
 Its timing lines compare nothing. The icanhazip number is a full network round
@@ -665,7 +788,8 @@ and the OSM tiles are never requested. Nothing here measures the tile path, and
 | --- | --- |
 | `snippet.js` | the Snippet source, minified on deploy |
 | `deploy.sh` | DNS, code and rule deployment through `cf` |
-| `bench.mjs` | byte and header check against icanhazip.com, plus all 104 hosts live |
+| `bench.mjs` | byte and header check against icanhazip.com, plus all 100 hosts live |
+| `reliability.mjs` | asks every host 12 times and ranks it by failures, blanks and latency |
 | `cost.mjs` | measures size, rule size and execution time |
 | `runtime.mjs` | compares source and minified run time |
 | `load.mjs` | ramps concurrency against the live zone |
