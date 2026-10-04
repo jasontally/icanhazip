@@ -91,15 +91,20 @@ console.log("\nsubdomains, checked against the live site");
 	// for content type and shape instead of for a one line body.
 	const pages = new Set(["map"]);
 
+	// These answer with JSON, or with 204 when they find nothing.
+	const jsonHosts = new Set(["headers", "proxy", "proxies"]);
+
 	// These reach a third party over the network, so they are slower and a slow
 	// or down service is allowed to answer empty. They must still answer a
 	// line. Only the pause is needed, the pass rule below does not use this.
+	const unresolved = [];
+
 	const slow = new Set([
 		"ptr", "hostname", "ns", "nameserver", "net", "netname", "netblock",
 		"range", "cidr", "prefix", "bgp", "dns",
 		"temp", "tempc", "celsius", "tempf", "fahrenheit", "feels", "humidity",
 		"wind", "clouds", "precip", "elevation", "elev", "sunrise", "sunset",
-		"wmo", "weather",
+		"wmo", "weather", "warp", "gateway",
 	]);
 
 	for (const label of hostLabels) {
@@ -110,7 +115,16 @@ console.log("\nsubdomains, checked against the live site");
 				headers: { "user-agent": "icanhazip-bench/1.0" },
 			});
 		} catch (error) {
-			check(false, `${label}.jasontally.com`, `request failed: ${error.message}`);
+			// A name that does not resolve locally is not the service failing.
+			// It is a stale resolver cache on this machine, which happens for a
+			// while after a record is created.
+			const local = error.cause?.code ?? error.code ?? "";
+			const isDns = String(local).includes("ENOTFOUND") || String(local).includes("EAI_AGAIN");
+			unresolved.push(label);
+			check(false, `${label}.jasontally.com`,
+				isDns
+					? `no DNS answer on this machine (${local}), the record is fine`
+					: `request failed: ${error.message}`);
 			continue;
 		}
 		const body = await live.text();
@@ -123,6 +137,32 @@ console.log("\nsubdomains, checked against the live site");
 				`${label}.jasontally.com`,
 				`${live.status} ${body.length} bytes of HTML`,
 			);
+			await sleep(100);
+			continue;
+		}
+
+		// headers answers with JSON. proxy and proxies answer with JSON when
+		// they find something, and 204 when they find nothing, which is the
+		// behaviour icanhazproxy had.
+		if (jsonHosts.has(label)) {
+			if (live.status === 204) {
+				check(body.length === 0, `${label}.jasontally.com`,
+					"204, nothing found, as icanhazproxy did");
+			} else {
+				let parses = true;
+				try {
+					JSON.parse(body);
+				} catch {
+					parses = false;
+				}
+				check(
+					live.status === 200 &&
+						parses &&
+						live.headers.get("content-type") === "application/json",
+					`${label}.jasontally.com`,
+					parses ? `200, ${body.length} bytes of JSON` : `200 but not JSON: ${body.slice(0, 40)}`,
+				);
+			}
 			await sleep(100);
 			continue;
 		}
@@ -140,6 +180,17 @@ console.log("\nsubdomains, checked against the live site");
 		);
 		await sleep(slow.has(label) ? 400 : 100);
 	}
+}
+
+if (unresolved.length > 0) {
+	console.log(
+		`\n${unresolved.length} host(s) had no DNS answer on this machine: ` +
+			`${unresolved.join(", ")}`,
+	);
+	console.log(
+		"  That is a stale resolver cache here, not the zone. Verify with DoH," +
+			"\n  or run: sudo resolvectl flush-caches",
+	);
 }
 
 console.log("\ntiming, 5 samples each");

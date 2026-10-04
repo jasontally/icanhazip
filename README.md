@@ -291,20 +291,37 @@ Google App Engine and nothing sends them any more. `xff` covers
 proxy declared. Cloudflare does not add that header itself, so it is empty
 unless something upstream sent one.
 
-### VPN and gateway detection
+### VPN and gateway detection, which does not work
 
 | Host | Value |
 | --- | --- |
-| `warp` | `on`, `off`, `plus`, `trusted`, `host` or `inbound` |
-| `gateway` | `on` or `off` |
+| `warp` | always empty |
+| `gateway` | always empty |
 
-Cloudflare knows these two authoritatively. Neither appears in `request.cf`, so
-they come from one subrequest to `/cdn-cgi/trace` on the same host. That answers
-"is this visitor on a VPN" with a fact instead of a guess from headers.
+**These two are a real ceiling, not a missing field.** Cloudflare knows whether
+a visitor is on WARP or Gateway, and it reports both at `/cdn-cgi/trace`:
 
-The handler passes any `/cdn-cgi/` path straight to `fetch`, so the subrequest
-can never come back into this Snippet even if Cloudflare changed the order in
-which it runs the two.
+```console
+$ curl https://warp.jasontally.com/cdn-cgi/trace | grep warp
+warp=off
+```
+
+A Snippet cannot read that. `fetch()` inside a Snippet is an origin request, and
+this zone's origin is `100::1` with nothing behind it, so the subrequest finds no
+trace. Cloudflare serves `/cdn-cgi/` to a browser before any Snippet runs, but
+that ordering is exactly what a subrequest cannot exploit.
+
+A first attempt used a guard that returned `fetch(request)` for any `/cdn-cgi/`
+path. That made it worse, because it replaced Cloudflare's internal trace response
+with the same dead origin fetch, and `/cdn-cgi/trace` stopped working for
+browsers too. The guard is gone.
+
+The hosts stay in the rule and answer empty rather than 404, so the names are
+reserved and a future method can fill them in. Two upgrade paths: Cloudflare's
+Ruleset Engine exposes `warp`, `gateway` and `rbi` as `http.request.cf.*` fields,
+so a Transform Rule can act on them, though a Snippet still cannot read them.
+Failing that, a second zone with no Snippet rule would let `fetch()` reach
+`/cdn-cgi/trace` on Cloudflare rather than an origin.
 
 ### Hosts that are often empty
 
@@ -332,16 +349,16 @@ no language sent
 | --- | --- | --- | --- |
 | `request.cf` | 42 | no | no |
 | request headers | 4 | no | no |
+| `/cdn-cgi/trace`, unreachable | 2 | no | no |
 | `new Date()` | 16 | no | no |
 | computed in the handler | 11 | no | no |
 | `cloudflare-dns.com` | 5 | no, stays inside Cloudflare | no |
 | `stat.ripe.net` | 7 | yes, RIPE NCC | 8 concurrent, register above 1000 a day |
 | `api.open-meteo.com` | 16 | yes, Open-Meteo in Switzerland | 10,000 a day on the free tier |
-| `/cdn-cgi/trace`, own zone | 2 | no, stays inside Cloudflare | no |
 | unpkg.com, tile.openstreetmap.org | `map` and `/whoami` | yes, for the page only | tiles: none published, may be withdrawn |
 
-79 of the 104 never leave Cloudflare. 23 reach a third party, 1 subrequest
-Cloudflare's own trace endpoint, and 1 returns a page. The five DNS hosts are not rate limited and are the most reliable of the
+81 of the 104 never leave Cloudflare. 23 reach a third party, 2 cannot reach
+the trace endpoint at all, and 1 returns a page. The five DNS hosts are not rate limited and are the most reliable of the
 group, since they run on Cloudflare's own resolver in the same network as the
 Snippet itself.
 
@@ -369,7 +386,7 @@ minified build lists the same hosts before uploading.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 16464 bytes | 32768 | 50% |
+| Source size, as uploaded minified | 16084 bytes | 32768 | 49% |
 | Rule expression | 2397 chars | 4096 | 59% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
@@ -461,7 +478,7 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-30120 bytes -> 16464 bytes, 45.3% smaller, 16304 free of 32768
+29757 bytes -> 16084 bytes, 45.3% smaller, 16684 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs

@@ -169,7 +169,9 @@ if node --input-type=module -e '
 		.replace(/\r?\n--[\w-]+--[\s\S]*$/, "")
 		.trim();
 	const sha = (text) => createHash("sha256").update(text).digest("hex");
-	process.exit(sha(body) === sha(readFileSync(builtPath, "utf8")) ? 0 : 1);
+	// Compare trimmed, because the multipart wrapper drops the trailing
+	// newline. Comparing raw made every deploy report a false mismatch.
+	process.exit(sha(body) === sha(readFileSync(builtPath, "utf8").trim()) ? 0 : 1);
 ' "$build/stored.txt" "$build/snippet.js"; then
 	echo "  confirmed on the edge, sha256 matches"
 else

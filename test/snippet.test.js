@@ -159,24 +159,16 @@ test("xff reports the chain a proxy declared, empty when there is none", async (
 	assert.equal(await chain.text(), "203.0.113.9, 198.51.100.7\n");
 });
 
-test("warp and gateway read the edge trace, and fail soft", async () => {
-	// These subrequest /cdn-cgi/trace on the same host, which a local fake
-	// Request cannot resolve, so they must return empty rather than throw.
+test("warp and gateway are present but empty, a known ceiling", async () => {
+	// Cloudflare knows these two and request.cf carries neither. A Snippet
+	// cannot read /cdn-cgi/trace because fetch() is an origin request. They
+	// stay in the rule so they answer empty rather than 404, which is honest.
 	for (const host of ["warp", "gateway"]) {
 		const response = await callHost(host);
+		assert.equal(response.status, 200, host);
 		assert.equal(response.headers.get("content-type"), "text/plain", host);
-		assert.match(await response.text(), /^[\x20-\x7e]*\n$/, host);
+		assert.equal(await response.text(), "\n", host);
 	}
-});
-
-test("the cdn-cgi guard delegates instead of recursing", async () => {
-	// If /cdn-cgi/trace ever reached this handler, the warp subrequest would
-	// loop forever. The guard hands the request to fetch instead, which off
-	// this machine fails to resolve, so the rejection proves the delegation
-	// happened and no value was produced.
-	const request = new Request("https://warp.jasontally.invalid/cdn-cgi/trace");
-	request.cf = CF;
-	await assert.rejects(() => snippet.fetch(request), /fetch failed/);
 });
 
 test("both map pages send a Referer, as the OSM tile policy requires", async () => {

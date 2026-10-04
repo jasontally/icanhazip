@@ -442,10 +442,11 @@ const DERIVED = {
 	// The chain a proxy declared, left to right. Cloudflare does not add this
 	// header of its own, so it is empty unless something upstream sent one.
 	xff: (request) => request.headers.get("x-forwarded-for") ?? "",
-	// Cloudflare knows these two authoritatively and request.cf carries
-	// neither, so they come from the edge's own trace endpoint.
-	warp: (request) => traceField(request, "warp"),
-	gateway: (request) => traceField(request, "gateway"),
+	// Cloudflare knows these two, but a Snippet cannot read where it knows
+	// them from. Always empty, and that is a real ceiling rather than a
+	// missing field. See the note beside the JSON hosts below.
+	warp: () => "",
+	gateway: () => "",
 };
 
 // Replacements for the services Major Hayden retired in August 2022. His
@@ -486,28 +487,17 @@ const JSON_HOSTS = {
 	proxies: proxyReport,
 };
 
-// /cdn-cgi/trace is answered by Cloudflare before any Snippet runs, which is
-// what makes this subrequest safe. If that ordering ever changed, the guard in
-// fetch would pass the path through instead of recursing.
-const traceField = async (request, field) => {
-	try {
-		const response = await fetch(new URL("/cdn-cgi/trace", request.url), {
-			headers: { accept: "text/plain" },
-		});
-		if (!response.ok) return "";
-		const body = await response.text();
-		// A trace body is key=value lines. If the Snippet ever intercepted the
-		// path, this finds no match and returns empty rather than looping.
-		if (!body.includes("colo=")) return "";
-		for (const line of body.split("\n")) {
-			const at = line.indexOf("=");
-			if (at > 0 && line.slice(0, at) === field) return line.slice(at + 1);
-		}
-	} catch {
-		return "";
-	}
-	return "";
-};
+// CEILING: a Snippet cannot read /cdn-cgi/trace, so warp and gateway always
+// answer empty. Cloudflare serves that path to a browser, but a Snippet's
+// fetch() is an origin request, and this zone's origin is 100::1 with nothing
+// behind it. A guard that returned fetch(request) for /cdn-cgi/ was tried and
+// made it worse, because that replaced Cloudflare's internal response with the
+// same dead origin fetch.
+//
+// Two upgrade paths. Cloudflare's Ruleset Engine exposes warp, gateway and rbi
+// as http.request.cf.* fields, so a Transform Rule could act on them, though
+// not a Snippet. Failing that, a second zone with no Snippet rule would let
+// fetch() reach /cdn-cgi/trace on Cloudflare rather than an origin.
 
 // WMO weather interpretation codes, the standard table Open-Meteo documents.
 // A number is not useful on its own, so weather turns it into words.
@@ -759,11 +749,6 @@ export default {
 
 const wantsPage =
 			url.pathname === "/whoami" || url.searchParams.get("whoami") === "";
-
-		// Let Cloudflare's own endpoints through untouched. The warp and
-		// gateway hosts subrequest /cdn-cgi/trace, and this guarantees that
-		// path can never come back into this handler.
-		if (url.pathname.startsWith("/cdn-cgi/")) return fetch(request);
 
 		// /whoami always gives the details page, on every host.
 		if (wantsPage) return page(detailsPage(request, ip));
