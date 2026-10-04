@@ -9,7 +9,7 @@ $ curl https://ip.jasontally.com/
 203.0.113.7
 ```
 
-98 subdomains, one data point each. `city` gives the city, `colo` the Cloudflare
+104 subdomains, one data point each. `city` gives the city, `colo` the Cloudflare
 data centre, `ptr` the reverse DNS name, `temp` the temperature.
 
 ## Behaviour
@@ -247,6 +247,65 @@ builds only an OpenStreetMap URL, which this project also carries as a plain
 link beside the map. When Cloudflare sends no coordinates, both pages say so
 instead of showing an empty map.
 
+### Replacements for the services Major retired
+
+[Major Hayden switched off six extra services](https://major.io/p/extra-icanhaz-services-going-offline/)
+in August 2022. Two already exist here, two now do, and two cannot be done by a
+Snippet at all.
+
+| Retired service | Replaced by | How |
+| --- | --- | --- |
+| `icanhazptr.com` | `ptr`, `hostname` | one DNS lookup, already had it |
+| `icanhazepoch` | `epoch`, `timestamp` | computed, already had it |
+| `icanhazheaders` | `headers` | JSON of every request header |
+| `icanhazproxy` | `proxy`, `proxies` | JSON of the proxy headers found |
+| `icanhaztrace` | nothing | needs raw sockets |
+| `icanhaztraceroute` | nothing | needs raw sockets |
+
+```console
+$ curl https://headers.jasontally.com/
+{
+  "accept": "*/*",
+  "cf-connecting-ip": "203.0.113.7",
+  "cf-ray": "a456b246ab184e75",
+  ...
+}
+
+$ curl -i https://proxy.jasontally.com/ | head -1
+HTTP/2 204
+
+$ curl https://proxy.jasontally.com/ -H 'Via: 1.1 proxy.example.net'
+{
+  "via": "1.1 proxy.example.net"
+}
+```
+
+`proxy` returns **204 No Content** when it finds nothing, which is what the
+original did and what lets a script tell "no proxy" from "empty". A plain line
+would lose that.
+
+It scans the same nine headers Major scanned. Three of them,
+`http_pc_remote_addr`, `http_client_ip` and `http_x_appengine_country`, are from
+Google App Engine and nothing sends them any more. `xff` covers
+`x-forwarded-for`, which Major's list never included, and reports the chain a
+proxy declared. Cloudflare does not add that header itself, so it is empty
+unless something upstream sent one.
+
+### VPN and gateway detection
+
+| Host | Value |
+| --- | --- |
+| `warp` | `on`, `off`, `plus`, `trusted`, `host` or `inbound` |
+| `gateway` | `on` or `off` |
+
+Cloudflare knows these two authoritatively. Neither appears in `request.cf`, so
+they come from one subrequest to `/cdn-cgi/trace` on the same host. That answers
+"is this visitor on a VPN" with a fact instead of a guess from headers.
+
+The handler passes any `/cdn-cgi/` path straight to `fetch`, so the subrequest
+can never come back into this Snippet even if Cloudflare changed the order in
+which it runs the two.
+
 ### Hosts that are often empty
 
 A known host with no data answers with an empty line. It never falls through to
@@ -272,15 +331,17 @@ no language sent
 | Source | Hosts | Third party sees the visitor | Rate limited |
 | --- | --- | --- | --- |
 | `request.cf` | 42 | no | no |
+| request headers | 4 | no | no |
 | `new Date()` | 16 | no | no |
 | computed in the handler | 11 | no | no |
 | `cloudflare-dns.com` | 5 | no, stays inside Cloudflare | no |
 | `stat.ripe.net` | 7 | yes, RIPE NCC | 8 concurrent, register above 1000 a day |
 | `api.open-meteo.com` | 16 | yes, Open-Meteo in Switzerland | 10,000 a day on the free tier |
+| `/cdn-cgi/trace`, own zone | 2 | no, stays inside Cloudflare | no |
 | unpkg.com, tile.openstreetmap.org | `map` and `/whoami` | yes, for the page only | tiles: none published, may be withdrawn |
 
-74 of the 98 never leave Cloudflare. 23 reach a third party, and 1 returns a
-page. The five DNS hosts are not rate limited and are the most reliable of the
+79 of the 104 never leave Cloudflare. 23 reach a third party, 1 subrequest
+Cloudflare's own trace endpoint, and 1 returns a page. The five DNS hosts are not rate limited and are the most reliable of the
 group, since they run on Cloudflare's own resolver in the same network as the
 Snippet itself.
 
@@ -294,7 +355,7 @@ GPS fix, so `city` can land on the city centre and `zip` can be wrong.
 
 ## One Snippet, one rule
 
-All 98 hosts share one Snippet and one rule, written as a set test:
+All 104 hosts share one Snippet and one rule, written as a set test:
 
 ```
 (http.host in {"ip.jasontally.com" "city.jasontally.com" ...})
@@ -308,13 +369,14 @@ minified build lists the same hosts before uploading.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 15296 bytes | 32768 | 47% |
-| Rule expression | 2256 chars | 4096 | 55% |
+| Source size, as uploaded minified | 16464 bytes | 32768 | 50% |
+| Rule expression | 2397 chars | 4096 | 59% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
 The rule expression is the limit that binds. A rule holds 4096 characters and
-each host costs about 23, so one Snippet reaches roughly 176 hosts. At 98 there
-is room for about 78 more, after which a second Snippet takes the overflow.
+each host costs about 23, so one Snippet reaches roughly 175 hosts. At 104
+there is room for about 71 more, after which a second Snippet takes the
+overflow.
 
 `deploy.sh` measures the expression and stops if it would pass 4096.
 
@@ -364,7 +426,7 @@ Create one at <https://dash.cloudflare.com/profile/api-tokens>:
 | Permission | Access | Why |
 | --- | --- | --- |
 | Zone / Snippets | Edit | upload the code and set the rule |
-| Zone / DNS | Edit | create the 98 AAAA records |
+| Zone / DNS | Edit | create the 104 AAAA records |
 | Zone / Zone | Read | let `cf` resolve the zone |
 
 Scope it to Zone `jasontally.com`. Account
@@ -399,7 +461,7 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-26756 bytes -> 15296 bytes, 42.8% smaller, 17472 free of 32768
+30120 bytes -> 16464 bytes, 45.3% smaller, 16304 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs
@@ -467,7 +529,7 @@ Two things differ from what icanhazip.com sends:
 icanhazip.com also sends `set-cookie`, `cf-ray`, `alt-svc` and `server`.
 Cloudflare adds most of those on its own.
 
-`bench.mjs` walks all 98 hosts against the live site too, so a host that stops
+`bench.mjs` walks all 104 hosts against the live site too, so a host that stops
 answering gets caught.
 
 Its timing lines compare nothing. The icanhazip number is a full network round
@@ -553,7 +615,7 @@ and the OSM tiles are never requested. Nothing here measures the tile path, and
 | --- | --- |
 | `snippet.js` | the Snippet source, minified on deploy |
 | `deploy.sh` | DNS, code and rule deployment through `cf` |
-| `bench.mjs` | byte and header check against icanhazip.com, plus all 98 hosts live |
+| `bench.mjs` | byte and header check against icanhazip.com, plus all 104 hosts live |
 | `cost.mjs` | measures size, rule size and execution time |
 | `runtime.mjs` | compares source and minified run time |
 | `load.mjs` | ramps concurrency against the live zone |

@@ -65,6 +65,19 @@ const plain = (value) =>
 		},
 	});
 
+const json = (body) =>
+	new Response(body, {
+		headers: {
+			"content-type": "application/json",
+			"cache-control": "no-store",
+			"access-control-allow-origin": "*",
+		},
+	});
+
+// icanhazproxy answered 204 when it found nothing, which lets a script tell
+// "no proxy" apart from "empty". Returning a line would lose that.
+const noContent = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+
 // Leaflet is 45 KB, over the 32 KB Snippet limit, so it loads from a CDN.
 // SRI pins the exact bytes. Loading it makes this page contact unpkg.com and
 // tile.openstreetmap.org, so the page is no longer private to the visitor.
@@ -426,6 +439,74 @@ const DERIVED = {
 		const code = (await weather(request, "weather_code")).trim();
 		return code === "" ? "" : describeWeather(Number(code));
 	},
+	// The chain a proxy declared, left to right. Cloudflare does not add this
+	// header of its own, so it is empty unless something upstream sent one.
+	xff: (request) => request.headers.get("x-forwarded-for") ?? "",
+	// Cloudflare knows these two authoritatively and request.cf carries
+	// neither, so they come from the edge's own trace endpoint.
+	warp: (request) => traceField(request, "warp"),
+	gateway: (request) => traceField(request, "gateway"),
+};
+
+// Replacements for the services Major Hayden retired in August 2022. His
+// icanhazproxy looked at these nine headers; the three http_* entries date
+// from Google App Engine and nothing sends them any more.
+const PROXY_HEADERS = [
+	"via",
+	"forwarded",
+	"client-ip",
+	"useragent_via",
+	"proxy_connection",
+	"xproxy_connection",
+	"http_pc_remote_addr",
+	"http_client_ip",
+	"http_x_appengine_country",
+];
+
+const foundProxyHeaders = (request) => {
+	const found = {};
+	for (const name of PROXY_HEADERS) {
+		const value = request.headers.get(name);
+		if (value !== null) found[name] = value;
+	}
+	return Object.keys(found).length > 0 ? found : null;
+};
+
+// icanhazproxy answered 204 when it found nothing. A null return means the
+// caller should send 204 No Content rather than an empty line.
+const proxyReport = (request) => {
+	const found = foundProxyHeaders(request);
+	return found === null ? null : JSON.stringify(found, null, 2);
+};
+
+// Hosts that answer with JSON rather than a plain line.
+const JSON_HOSTS = {
+	headers: (request) => JSON.stringify(Object.fromEntries(request.headers), null, 2),
+	proxy: proxyReport,
+	proxies: proxyReport,
+};
+
+// /cdn-cgi/trace is answered by Cloudflare before any Snippet runs, which is
+// what makes this subrequest safe. If that ordering ever changed, the guard in
+// fetch would pass the path through instead of recursing.
+const traceField = async (request, field) => {
+	try {
+		const response = await fetch(new URL("/cdn-cgi/trace", request.url), {
+			headers: { accept: "text/plain" },
+		});
+		if (!response.ok) return "";
+		const body = await response.text();
+		// A trace body is key=value lines. If the Snippet ever intercepted the
+		// path, this finds no match and returns empty rather than looping.
+		if (!body.includes("colo=")) return "";
+		for (const line of body.split("\n")) {
+			const at = line.indexOf("=");
+			if (at > 0 && line.slice(0, at) === field) return line.slice(at + 1);
+		}
+	} catch {
+		return "";
+	}
+	return "";
 };
 
 // WMO weather interpretation codes, the standard table Open-Meteo documents.
@@ -658,6 +739,7 @@ export const hostLabels = [
 	...Object.keys(HOSTS),
 	...Object.keys(DERIVED),
 	...Object.keys(PAGES),
+	...Object.keys(JSON_HOSTS),
 ];
 
 const page = (body) =>
@@ -675,11 +757,22 @@ export default {
 		const label = url.hostname.split(".")[0];
 		const inZone = url.hostname.endsWith(".jasontally.com");
 
-		const wantsPage =
+const wantsPage =
 			url.pathname === "/whoami" || url.searchParams.get("whoami") === "";
+
+		// Let Cloudflare's own endpoints through untouched. The warp and
+		// gateway hosts subrequest /cdn-cgi/trace, and this guarantees that
+		// path can never come back into this handler.
+		if (url.pathname.startsWith("/cdn-cgi/")) return fetch(request);
 
 		// /whoami always gives the details page, on every host.
 		if (wantsPage) return page(detailsPage(request, ip));
+
+		// These hosts answer with JSON, or with 204 when they find nothing.
+		if (inZone && label in JSON_HOSTS) {
+			const body = JSON_HOSTS[label](request);
+			return body === null ? noContent() : json(`${body}\n`);
+		}
 
 		// These hosts answer with a page, not a value.
 		if (inZone && label in PAGES) return page(PAGES[label](request));

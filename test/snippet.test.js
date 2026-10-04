@@ -110,6 +110,75 @@ test("/whoami path returns the same HTML page", async () => {
 	assert.match(await response.text(), /<!DOCTYPE html>/);
 });
 
+test("headers answers with every request header as JSON", async () => {
+	const response = await callHost("headers", {
+		headers: { "CF-Connecting-IP": "203.0.113.7", "x-custom-test": "kept" },
+	});
+	assert.equal(response.headers.get("content-type"), "application/json");
+
+	const parsed = JSON.parse(await response.text());
+	assert.equal(parsed["x-custom-test"], "kept");
+	assert.equal(parsed["cf-connecting-ip"], "203.0.113.7");
+});
+
+test("proxy finds the headers a proxy declares, and 204 when none", async () => {
+	// icanhazproxy returned 204 when it found nothing, which is what tells a
+	// script the difference between "no proxy" and "empty".
+	const clean = await callHost("proxy");
+	assert.equal(clean.status, 204);
+	assert.equal(await clean.text(), "");
+
+	const behind = await callHost("proxy", {
+		headers: {
+			"CF-Connecting-IP": "203.0.113.7",
+			via: "1.1 proxy.example.net",
+			forwarded: "for=198.51.100.7;proto=https",
+		},
+	});
+	assert.equal(behind.status, 200);
+	const parsed = JSON.parse(await behind.text());
+	assert.equal(parsed.via, "1.1 proxy.example.net");
+	assert.equal(parsed.forwarded, "for=198.51.100.7;proto=https");
+});
+
+test("proxies is the same answer as proxy", async () => {
+	const options = { headers: { "CF-Connecting-IP": "203.0.113.7", via: "1.1 p" } };
+	assert.equal(
+		await (await callHost("proxies", options)).text(),
+		await (await callHost("proxy", options)).text(),
+	);
+});
+
+test("xff reports the chain a proxy declared, empty when there is none", async () => {
+	const none = await callHost("xff", { headers: { "CF-Connecting-IP": "203.0.113.7" } });
+	assert.equal(await none.text(), "\n");
+
+	const chain = await callHost("xff", {
+		headers: { "CF-Connecting-IP": "203.0.113.7", "x-forwarded-for": "203.0.113.9, 198.51.100.7" },
+	});
+	assert.equal(await chain.text(), "203.0.113.9, 198.51.100.7\n");
+});
+
+test("warp and gateway read the edge trace, and fail soft", async () => {
+	// These subrequest /cdn-cgi/trace on the same host, which a local fake
+	// Request cannot resolve, so they must return empty rather than throw.
+	for (const host of ["warp", "gateway"]) {
+		const response = await callHost(host);
+		assert.equal(response.headers.get("content-type"), "text/plain", host);
+		assert.match(await response.text(), /^[\x20-\x7e]*\n$/, host);
+	}
+});
+
+test("the cdn-cgi guard delegates instead of recursing", async () => {
+	// If /cdn-cgi/trace ever reached this handler, the warp subrequest would
+	// loop forever. The guard hands the request to fetch instead, which off
+	// this machine fails to resolve, so the rejection proves the delegation
+	// happened and no value was produced.
+	const request = new Request("https://warp.jasontally.invalid/cdn-cgi/trace");
+	request.cf = CF;
+	await assert.rejects(() => snippet.fetch(request), /fetch failed/);
+});
+
 test("both map pages send a Referer, as the OSM tile policy requires", async () => {
 	// The tile usage policy forbids a Referrer-Policy that stops the Referer
 	// header reaching tile.openstreetmap.org, and says referer-stripping
@@ -430,6 +499,9 @@ assert.deepEqual([...hostLabels].sort(), [
 	"temp", "tempc", "celsius", "tempf", "fahrenheit", "feels", "humidity",
 	"wind", "clouds", "precip", "elevation", "elev", "sunrise", "sunset",
 	"wmo", "weather",
+
+	// Replacements for the services Major Hayden retired in August 2022.
+	"headers", "proxy", "proxies", "xff", "warp", "gateway",
 ].sort());
 });
 
