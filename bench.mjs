@@ -78,6 +78,8 @@ console.log("\npaths that must answer with the plain address");
 }
 
 console.log("\nsubdomains, checked against the live site");
+// Declared out here so the summary after the loop can read it.
+const unresolved = [];
 {
 	// Cloudflare sends these for every proxied request, so they must not be
 	// empty. Everything else must be a line, but the line may be empty.
@@ -97,8 +99,6 @@ console.log("\nsubdomains, checked against the live site");
 	// These reach a third party over the network, so they are slower and a slow
 	// or down service is allowed to answer empty. They must still answer a
 	// line. Only the pause is needed, the pass rule below does not use this.
-	const unresolved = [];
-
 	const slow = new Set([
 		"ptr", "hostname", "ns", "nameserver", "net", "netname", "netblock",
 		"range", "cidr", "prefix", "bgp", "dns",

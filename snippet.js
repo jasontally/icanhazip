@@ -284,6 +284,14 @@ ${section(
 )}
 ${section("All request headers", `<pre>${escapeHtml(JSON.stringify(headers, null, 2))}</pre>`)}
 ${section("All request.cf", `<pre>${escapeHtml(JSON.stringify(cf, null, 2))}</pre>`)}
+${section(
+	"Cloudflare edge trace",
+	`<p>Cloudflare answers <a href="/cdn-cgi/trace"><code>/cdn-cgi/trace</code></a> itself,
+	before any Snippet runs, and it reports a few things this page cannot. That
+	includes <code>warp</code>, <code>gateway</code> and <code>rbi</code>, which
+	say whether the visitor is on Cloudflare WARP, Gateway or RBI, plus
+	<code>kex</code>, <code>sliver</code> and <code>ts</code>.</p>`,
+)}
 <footer>Served by a Cloudflare Snippet. <a href="${SOURCE}">${SOURCE}</a></footer>
 </html>
 `;

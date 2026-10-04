@@ -323,6 +323,39 @@ so a Transform Rule can act on them, though a Snippet still cannot read them.
 Failing that, a second zone with no Snippet rule would let `fetch()` reach
 `/cdn-cgi/trace` on Cloudflare rather than an origin.
 
+### Getting those values from the browser instead
+
+`/cdn-cgi/trace` answers on every host, Cloudflare serving it before any Snippet
+runs, so `/whoami` links to it in a "Cloudflare edge trace" section. A browser
+following that link sees the three fields this Snippet cannot:
+
+```console
+$ curl https://colo.jasontally.com/cdn-cgi/trace
+fl=369f707
+h=colo.jasontally.com
+ip=50.88.174.31
+ts=1791146264.000
+visit_scheme=https
+uag=curl/8.14.1
+colo=MIA
+sliver=none
+http=http/2
+loc=US
+tls=TLSv1.3
+sni=plaintext
+warp=off
+gateway=off
+rbi=off
+kex=X25519MLKEM768
+```
+
+`warp`, `gateway` and `rbi` say whether the visitor is on Cloudflare WARP,
+Gateway or RBI, which is the authoritative answer to "am I on a VPN".
+`kex` is the key exchange, so `X25519MLKEM768` means post-quantum hybrid.
+`sliver` is Cloudflare's finer-grained hardware tier inside a colo.
+
+The link is relative, so it works from every host that serves `/whoami`.
+
 ### Hosts that are often empty
 
 A known host with no data answers with an empty line. It never falls through to
@@ -386,7 +419,7 @@ minified build lists the same hosts before uploading.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 16084 bytes | 32768 | 49% |
+| Source size, as uploaded minified | 16491 bytes | 32768 | 50% |
 | Rule expression | 2397 chars | 4096 | 59% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
@@ -478,7 +511,7 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-29757 bytes -> 16084 bytes, 45.3% smaller, 16684 free of 32768
+30176 bytes -> 16491 bytes, 45.4% smaller, 16277 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs

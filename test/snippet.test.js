@@ -171,6 +171,18 @@ test("warp and gateway are present but empty, a known ceiling", async () => {
 	}
 });
 
+test("the whoami page links the edge trace, for the fields it cannot show", async () => {
+	const body = await (await call("https://colo.jasontally.com/whoami")).text();
+
+	assert.match(body, /href="\/cdn-cgi\/trace"/);
+	// Name the fields that only the trace carries, or the link is just noise.
+	for (const field of ["warp", "gateway", "rbi", "kex", "sliver"]) {
+		assert.match(body, new RegExp(`<code>${field}</code>`), field);
+	}
+	// The link must be relative, so it works on every host that serves whoami.
+	assert.doesNotMatch(body, /href="https:\/\/[^"]*cdn-cgi\/trace"/);
+});
+
 test("both map pages send a Referer, as the OSM tile policy requires", async () => {
 	// The tile usage policy forbids a Referrer-Policy that stops the Referer
 	// header reaching tile.openstreetmap.org, and says referer-stripping
