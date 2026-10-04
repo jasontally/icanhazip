@@ -473,6 +473,80 @@ answering gets caught.
 Its timing lines compare nothing. The icanhazip number is a full network round
 trip, while the Snippet number is only the JavaScript, without network or edge.
 
+## Load
+
+```console
+npm run load -- cf 128
+npm run load -- dns 256
+```
+
+`load.mjs` ramps concurrency against the live zone and reports throughput and
+latency at each step. Only two profiles exist, `cf` for the Cloudflare metadata
+hosts and `dns` for the five that use `cloudflare-dns.com`. The whois and
+weather profiles were removed on purpose, because they drive `stat.ripe.net`
+and `open-meteo.com`, which have published daily ceilings, and loading them
+with synthetic traffic spends a third party's quota.
+
+### Measured on a 2 core box
+
+These numbers are a floor, not a ceiling. The load generator shares two cores
+with everything else on the machine, and it is the first thing to fall over.
+
+| Concurrent | req/s | p50 ms | p95 ms | p99 ms | Errors |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 8 | 120 | 150 | 160 | 0 |
+| 4 | 96 | 30 | 100 | 136 | 0 |
+| 16 | 444 | 31 | 37 | 43 | 0 |
+| 32 | 877 | 31 | 39 | 50 | 0 |
+| 64 | 1658 | 31 | 46 | 73 | 0 |
+| 96 | 2451 | 32 | 48 | 63 | 0 |
+| 128 | 3012 | 33 | 54 | 77 | 0 |
+
+`cf`, 56 hosts, 5 s per step.
+
+| Concurrent | req/s | p50 ms | p95 ms | p99 ms | Errors |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 26 | 32 | 39 | 100 | 0 |
+| 32 | 797 | 33 | 42 | 69 | 0 |
+| 128 | 2829 | 35 | 59 | 119 | 0 |
+| 256 | 3936 | 47 | 89 | 168 | 0 |
+
+`dns`, 5 hosts, 6 s per step. One `cloudflare-dns.com` subrequest per request.
+
+| Concurrent | req/s | p50 ms | p95 ms | p99 ms | Errors |
+| --- | --- | --- | --- | --- | --- |
+| 8 | 208 | 32 | 40 | 48 | 0 |
+| 32 | 778 | 34 | 45 | 68 | 0 |
+| 64 | 1382 | 37 | 62 | 95 | 0 |
+| 128 | 1987 | 52 | 87 | 224 | 0 |
+
+`page`, the two HTML pages, 5 s per step.
+
+### Where it slows down, and where it stops
+
+**It slows down at 512 concurrent and above.** Throughput flattens around
+3400 req/s and p95 climbs from 230 ms to 813 ms between 512 and 1024.
+
+**It never stopped.** Across every step up to 1024 concurrent the edge returned
+zero non-200 responses. Every failure recorded was `ETIMEDOUT` on a local
+socket, and `load.mjs` reports the cause so a client side timeout is never
+counted as the edge refusing. That happened at roughly 3000 req/s from one
+2-core box, which places the limit at the load generator rather than at
+Cloudflare.
+
+Three readings worth keeping. Latency is flat from 16 to 96 concurrent, where
+p50 sits at 31 ms and p95 at 37 to 48 ms, so the Snippet itself adds nothing
+measurable and queues in bursts rather than backing up. The `cf` and `dns`
+groups land within a few percent of each other at 256 concurrent, 3938 against
+3936 req/s, so a subrequest to Cloudflare's own resolver costs no more than
+local metadata. The HTML pages run about half the throughput of a plain value,
+1987 against 3012 req/s at 128 concurrent, which is the 8.9 KB of HTML rather
+than 13 bytes.
+
+A caveat on the `page` profile. Node fetch does not run JavaScript, so Leaflet
+and the OSM tiles are never requested. Nothing here measures the tile path, and
+`/whoami` as a browser sees it makes two further third party requests.
+
 ## Files
 
 | File | Purpose |
@@ -482,6 +556,7 @@ trip, while the Snippet number is only the JavaScript, without network or edge.
 | `bench.mjs` | byte and header check against icanhazip.com, plus all 98 hosts live |
 | `cost.mjs` | measures size, rule size and execution time |
 | `runtime.mjs` | compares source and minified run time |
+| `load.mjs` | ramps concurrency against the live zone |
 | `test/snippet.test.js` | checks every response shape |
 
 The repo holds the readable source, not the uploaded bytes. `npm run
