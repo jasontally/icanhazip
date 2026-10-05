@@ -23,10 +23,9 @@ const CF = {
 	asOrganization: "CLOUDFLARENET",
 	colo: "DFW",
 	httpProtocol: "HTTP/2",
-	httpVersion: "2",
-	network: "IPN",
 	tlsVersion: "TLSv1.3",
 	tlsCipher: "AEAD-AES128-GCM-SHA256",
+	tlsClientHelloLength: 1570,
 	clientTcpRtt: 12,
 	ip: "203.0.113.7",
 	botManagement: { score: 1, verifiedBots: [] },
@@ -640,17 +639,17 @@ test("ua is empty when the client sends no user agent", async () => {
 	assert.equal(await (await callHost("ua")).text(), "\n");
 });
 
-test("every field a host reads really exists in request.cf", () => {
-	// The guard that should have caught ja3 and ja4. Both read a field that
-	// Cloudflare does not put in request.cf on this plan, so both always
-	// answered empty, and their own tests passed because the fixture invented
-	// the field. One check here covers every host, present and future.
+test("every request.cf field the snippet reads really exists", () => {
+	// The guard that should have caught three dead reads. Two hosts and one row
+	// of the details page named a field Cloudflare does not put in request.cf
+	// on this plan, so all three rendered empty for every visitor while the
+	// suite stayed green, because the fixture had invented the fields.
+	//
+	// One check covers the whole file rather than the HOSTS map alone, since
+	// the details page reads request.cf directly and was missed the first time.
 	const src = readFileSync(new URL("../snippet.js", import.meta.url), "utf8");
-	const body = src.slice(
-		src.indexOf("const HOSTS = {"),
-		src.indexOf("\n};", src.indexOf("const HOSTS = {")),
-	);
 	const real = new Set(REAL_CF_KEYS);
+
 	// HEADER_FIELDS is read from the source rather than repeated here, so this
 	// check follows the snippet if a host moves from a header to request.cf.
 	const headerBlock = src.slice(src.indexOf("const HEADER_FIELDS = new Set(["));
@@ -660,6 +659,35 @@ test("every field a host reads really exists in request.cf", () => {
 	);
 	assert.equal(headers.size, 4, "HEADER_FIELDS did not parse, so this check is blind");
 
+	// Comments are stripped first. A comment that explains a removed field
+	// names that field, and the guard flagged its own explanation.
+	const code = src
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+	// Every cf.SOMETHING in the file, wherever it appears.
+	const dotted = new Set(
+		[...code.matchAll(/\bcf\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]),
+	);
+	assert.ok(dotted.size > 10, `only found ${dotted.size} cf reads, so this check is blind`);
+
+	const invented = [...dotted]
+		.filter((field) => !real.has(field))
+		.sort()
+		// request.cf carries no ip key on a proxied request. The snippet reads
+		// it only as a fallback and the CF fixture provides it, so allow it.
+		.filter((field) => field !== "ip");
+	assert.deepEqual(
+		invented,
+		[],
+		"the snippet reads a request.cf field Cloudflare does not send, so it renders empty",
+	);
+
+	// And the HOSTS map specifically, since a field there becomes a whole host.
+	const body = src.slice(
+		src.indexOf("const HOSTS = {"),
+		src.indexOf("\n};", src.indexOf("const HOSTS = {")),
+	);
 	const read = [];
 	for (const [, label, list] of body.matchAll(
 		/^\t([A-Za-z0-9_]+):\s*\[([^\]]*)\]/gm,
@@ -669,24 +697,28 @@ test("every field a host reads really exists in request.cf", () => {
 			if (path) read.push([label, path]);
 		}
 	}
-	assert.ok(read.length > 40, `only found ${read.length} reads to check`);
-
-	const invented = read.filter(
-		([, path]) => !headers.has(path) && !real.has(path.split(".")[0]),
-	);
+	assert.ok(read.length > 30, `only found ${read.length} HOSTS reads to check`);
 	assert.deepEqual(
-		invented.map(([label, path]) => `${label} reads request.cf.${path}`),
+		read
+			.filter(([, path]) => !headers.has(path) && !real.has(path.split(".")[0]))
+			.map(([label, path]) => `${label} reads request.cf.${path}`),
 		[],
 		"a host reads a field Cloudflare does not send, so it always answers empty",
 	);
 });
 
-test("ja3 and ja4 are gone, because this plan does not send them", () => {
-	// request.cf on this plan carries no JA3 or JA4 key. The hashes of the
-	// ClientHello parts do exist and are the ingredients of a JA3 hash, but
-	// Cloudflare publishes the parts and not the hash.
-	assert.ok(!hostLabels.includes("ja3"), "ja3 must not be in the rule");
-	assert.ok(!hostLabels.includes("ja4"), "ja4 must not be in the rule");
+test("the details page shows no row that is always empty", async () => {
+	// Every cell of the page comes from either request.cf or a request header.
+	// A name that is not one of the 32 real keys renders as a dash forever,
+	// which is how the JA3 and JA4 rows survived until the probe found them.
+	const body = await (await call("https://colo.jasontally.com/whoami")).text();
+	assert.doesNotMatch(body, /JA[34]/, "no JA3 or JA4 row");
+	assert.doesNotMatch(body, /tlsClientHello[^L]/, "no invented tlsClientHello");
+
+	// The Client hello row must carry the real length, not nothing.
+	assert.match(body, /Client hello/);
+	const cell = body.match(/Client hello<\/th><td>([^<]*)<\/td>/)?.[1] ?? "";
+	assert.match(cell, /^\d+ bytes$/, `Client hello cell was "${cell}"`);
 });
 
 test("the IP comes from CF-Connecting-IP and falls back to request.cf", async () => {

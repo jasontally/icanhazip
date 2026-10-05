@@ -222,8 +222,10 @@ ${section(
 		["Method", request.method],
 		["URL", `${url.pathname}${url.search}`],
 		["Protocol", cf.httpProtocol ?? url.protocol.replace(":", "")],
-		["HTTP version", cf.httpVersion],
-		["Network", cf.network],
+		// There was an "HTTP version" and a "Network" row here, both reading
+		// request.cf.httpVersion and request.cf.network. Neither key exists on
+		// this plan, so both rendered as a dash for every visitor. Protocol
+		// above already says HTTP/2, which is the version.
 		["UTC time", new Date().toISOString()],
 	]),
 )}
@@ -266,9 +268,9 @@ ${section(
 	table([
 		["Version", cf.tlsVersion],
 		["Cipher", cf.tlsCipher],
-		["Client hello", cf.tlsClientHello],
-		["JA3", cf.tlsJa3Hash],
-		["JA4", cf.tlsJa4],
+		// tlsClientHelloLength, not tlsClientHello. There is no such key, so
+		// the old name rendered an empty row on every visitor's page.
+		["Client hello", `${cf.tlsClientHelloLength} bytes`],
 	]),
 )}
 ${section(
@@ -342,11 +344,6 @@ const HOSTS = {
 	ua: ["User-Agent"],
 	useragent: ["User-Agent"],
 	lang: ["Accept-Language"],
-	// ja3 and ja4 were here and both always answered empty. request.cf on
-	// this plan carries no JA3 or JA4 key at all, so there was nothing to
-	// read. The hashes of the ClientHello parts do exist, and they are the
-	// ingredients a JA3 hash is built from, but Cloudflare does not publish
-	// the hash itself. See the README for what those fields give instead.
 	state: ["region", "regionCode"],
 	province: ["region", "regionCode"],
 };
@@ -762,7 +759,7 @@ const wantsPage =
 			// A known host with no data answers with an empty line. It must not
 			// fall through to the IP address, or a missing field would look
 			// like a result. curl sends no Accept-Language, so lang is often
-			// empty, and Cloudflare sends no JA3 for most requests.
+			// empty.
 			return plain((await readHost(label, request)) ?? "");
 		}
 

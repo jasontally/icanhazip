@@ -421,8 +421,33 @@ keys** and neither `tlsJa3Hash` nor `tlsJa4` is among them. Their tests passed
 because the fixture had invented the field, so each test proved only that the
 invented field was passed through.
 
-There is now one guard test that compares every field a host reads against the
-real key list, so this class of bug fails the suite instead of production.
+Removing them exposed three more of the same fault, all on the details page,
+all invisible to the old tests. Every one of these read a field that does not
+exist and rendered a dash for every visitor:
+
+| Was on `/whoami` | Field it read | Is there a real field |
+| --- | --- | --- |
+| `JA3` | `cf.tlsJa3Hash` | no |
+| `JA4` | `cf.tlsJa4` | no |
+| `HTTP version` | `cf.httpVersion` | no, and `Protocol` above it already says `HTTP/2` |
+| `Network` | `cf.network` | no, and the Network section below says something else |
+| `Client hello` | `cf.tlsClientHello` | no, the key is `tlsClientHelloLength` |
+
+`Client hello` now reads the real key and shows `1570 bytes`. The other four
+rows are gone. **The page has no empty cell anywhere**, which was the test.
+
+### The guard
+
+One test now scans the whole file for every `cf.SOMETHING` and fails if any of
+it is not one of the 32 real keys. It reads `HEADER_FIELDS` out of the source
+rather than repeating it, and it strips comments first, because a comment
+explaining a removed field names that field and the guard flagged its own
+explanation.
+
+Verified against all five dead field names: put each one back and the suite
+fails. `load.mjs` and `bench.mjs` each check their own host lists against
+`hostLabels` and refuse to run against a name that has been removed, which is
+what stopped `ja3` and `ja4` from being load tested after they were gone.
 
 ### The fault that is left is a slow tail, not a failure
 
@@ -530,7 +555,7 @@ this printed "removed" for records that were still there.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 16430 bytes | 32768 | 50% |
+| Source size, as uploaded minified | 16356 bytes | 32768 | 50% |
 | Rule expression | 2308 chars | 4096 | 56% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
@@ -622,7 +647,7 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-29533 bytes -> 16430 bytes, 44.4% smaller, 16338 free of 32768
+29437 bytes -> 16356 bytes, 44.4% smaller, 16412 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs
@@ -666,17 +691,16 @@ guard that stops a hostile coordinate reaching the script block, the `origin`
 Referrer-Policy that the tile policy needs, and the WMO table, which is read
 through the module so it also passes on a minified build.
 
-One test is worth naming. **Every field a host reads really exists in
-`request.cf`.** It compares the field names in the `HOSTS` map against the 32
-keys the live edge actually sent, and it reads the `HEADER_FIELDS` list out of
-the source rather than repeating it, so it follows the snippet.
+One test is worth naming. **Every `request.cf` field the snippet reads really
+exists.** It scans the whole file rather than one map, because the details page
+reads `request.cf` directly and reading only the map missed four dead rows
+there.
 
-That test exists because `ja3` and `ja4` were broken on the live site for the
-whole life of the project and the suite was green the whole time. The fixture
-had invented the `tlsJa3Hash` key the host read, so the test proved only that
-the invented key was passed through. It was added after the reliability probe
-found both hosts empty on all 12 samples, and it now fails if any host reads a
-field Cloudflare does not send.
+That test exists because two hosts and four page rows were broken on the live
+site while the suite was green. The fixture had invented the fields they read,
+so each test proved only that the invented field was passed through. The
+fixture no longer invents anything: `httpVersion` and `network` came out of it
+along with the rows that used them.
 
 ## Benchmark
 
@@ -793,7 +817,7 @@ and the OSM tiles are never requested. Nothing here measures the tile path, and
 | `cost.mjs` | measures size, rule size and execution time |
 | `runtime.mjs` | compares source and minified run time |
 | `load.mjs` | ramps concurrency against the live zone |
-| `test/snippet.test.js` | checks every response shape |
+| `test/snippet.test.js` | checks every response shape, and every field read |
 
 The repo holds the readable source, not the uploaded bytes. `npm run
 bench:runtime` rebuilds the same minified file, so the upload is reproducible.

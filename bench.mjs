@@ -104,8 +104,25 @@ const unresolved = [];
 		"range", "cidr", "prefix", "bgp", "dns",
 		"temp", "tempc", "celsius", "tempf", "fahrenheit", "feels", "humidity",
 		"wind", "clouds", "precip", "elevation", "elev", "sunrise", "sunset",
-		"wmo", "weather", "warp", "gateway",
+		"wmo", "weather",
 	]);
+
+	// A host removed from snippet.js but left in one of these sets would be
+	// silently ignored, because the loop walks hostLabels. Two were, which is
+	// what this catches.
+	for (const [name, set] of [
+		["alwaysPresent", alwaysPresent],
+		["pages", pages],
+		["jsonHosts", jsonHosts],
+		["slow", slow],
+	]) {
+		const dead = [...set].filter((label) => !hostLabels.includes(label));
+		if (dead.length > 0) {
+			throw new Error(
+				`${name} names hosts that no longer exist: ${dead.join(", ")}`,
+			);
+		}
+	}
 
 	for (const label of hostLabels) {
 		if (label === "ip") continue;

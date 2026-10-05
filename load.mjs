@@ -20,6 +20,7 @@
 // A knee shows up as throughput flattening while p95 climbs.
 
 import { setTimeout as sleep } from "node:timers/promises";
+import { hostLabels } from "./snippet.js";
 
 const PROFILES = {
 	cf: ["ip", "colo", "city", "zip", "region", "country", "continent", "colo",
@@ -28,12 +29,29 @@ const PROFILES = {
 		"hour", "minute", "second", "epoch", "utc", "timezone", "tz", "st",
 		"ip4", "ipv4", "v4", "ua", "state", "province", "cc", "countrycode",
 		"zipcode", "postal", "postcode", "org", "proto", "useragent", "lang",
-		"ja3", "ja4", "cipher", "dma", "edge", "isp", "asn"],
+		"cipher", "dma", "edge", "isp", "asn"],
 	dns: ["ptr", "hostname", "ns", "nameserver", "dns"],
 	// A path, not a hostname, so it needs a host that answers on it. "whoami"
 	// alone resolves to nothing and every request ENOTFOUNDs.
 	page: ["ip/whoami", "map"],
 };
+
+// A host removed from snippet.js but left in a profile here would send every
+// request to a name that no longer resolves, and the report would blame the
+// zone. That happened with ja3 and ja4, which stayed in the cf profile after
+// both hosts were removed.
+for (const [name, hosts] of Object.entries(PROFILES)) {
+	const dead = hosts.filter(
+		(host) => !host.includes("/") && !hostLabels.includes(host),
+	);
+	if (dead.length > 0) {
+		console.error(
+			`profile ${name} names hosts that no longer exist: ${dead.join(", ")}`,
+		);
+		console.error(`snippet.js has ${hostLabels.length} hosts. Fix the profile.`);
+		process.exit(1);
+	}
+}
 
 const profile = process.argv[2] ?? "cf";
 const maxCps = Number(process.argv[3] ?? 64);
