@@ -118,12 +118,12 @@ else
 	# which one is present and neither place has to remember a flag.
 	#
 	# Measured on this file.
-	#   esbuild        16709 bytes
-	#   terser plain   16848 bytes
-	#   terser p3      16835 bytes
-	#   terser max     16703 bytes   6 bytes smaller than esbuild, 0.02%
+	#   esbuild        16402 bytes
+	#   terser plain   16536 bytes
+	#   terser p3      16523 bytes
+	#   terser max     16391 bytes   11 bytes smaller than esbuild, 0.03%
 	#
-	# esbuild is the default. The 6 byte difference is noise against a 32768 byte
+	# esbuild is the default. The 11 byte difference is noise against a 32768 byte
 	# limit, and esbuild does not use the unsafe_* transforms that terser max
 	# needs, so it is the safer build. Minification does not change run time
 	# either, see runtime.mjs. MINIFY='npx --yes terser' will switch.

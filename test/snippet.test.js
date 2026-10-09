@@ -244,12 +244,32 @@ test("the whoami page embeds a map with pinned libraries and a marker", async ()
 	assert.doesNotMatch(body, /unpkg\.com|tile\.openstreetmap\.org|demotiles|maplibre\.org/);
 });
 
-test("the page says where the map comes from, and offers a way out", async () => {
-	const body = await (await call("https://ip.jasontally.com/whoami")).text();
+test("neither map page carries a note, and there is no way to hide the map", async () => {
+	// The attribution control inside the map is the only credit, so a note that
+	// repeated it would be a second answer to the same question. There is no
+	// "stop loading" control either: the map is the page on map.jasontally.com,
+	// and on /whoami it is one section of many.
+	for (const target of ["https://ip.jasontally.com/whoami", "https://map.jasontally.com/"]) {
+		const body = await (await call(target)).text();
+		assert.doesNotMatch(body, /id="no-map"/, target);
+		assert.doesNotMatch(body, /class="note"/, target);
+		assert.doesNotMatch(body, /Loading a map|Stop loading|Hide the map/, target);
+		assert.doesNotMatch(body, /where\.remove\(\)/, target);
+		// What is left is the attribution control, and nothing else.
+		assert.match(body, /AttributionControl\(\{ compact: true \}\)/, target);
+	}
+});
 
-	assert.match(body, /tiles\.jasontally\.com/);
-	assert.match(body, /id="no-map"/);
-	assert.match(body, /where\.remove\(\)/);
+test("the map pages credit OpenStreetMap only through the attribution control", async () => {
+	// The control is built without MapLibre's own default, because that default
+	// adds a "MapLibre" link beside the credit. The credit itself comes from the
+	// style JSON, which is what carries the OpenStreetMap attribution.
+	for (const target of ["https://ip.jasontally.com/whoami", "https://map.jasontally.com/"]) {
+		const body = await (await call(target)).text();
+		assert.match(body, /attributionControl: false/, target);
+		assert.doesNotMatch(body, /customAttribution/, target);
+		assert.doesNotMatch(body, /maplibre\.org/, target);
+	}
 });
 
 test("no coordinates means no map and no libraries", async () => {
@@ -381,8 +401,13 @@ test("map.jasontally.com is the whole map, not a value", async () => {
 	assert.match(body, /styles\/dark\.json/);
 	assert.match(body, /maplibre-gl\.js" integrity="sha384-5\+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp"/);
 	assert.match(body, /pmtiles\.js" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0\+JGZ5H\+3mfzVIp6zsQNkTsfGJot93"/);
-	// The map data is credited here and again in the attribution control.
-	assert.match(body, /OpenStreetMap<\/a> contributors/);
+	// The OpenStreetMap credit is not in the page at all: it comes from the
+	// style JSON through the attribution control. A credit written here would be
+	// a second answer to the same question, and the two could drift. Strip the
+	// comments first, because the explanatory ones name OpenStreetMap.
+	const bare = body.replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*\/\/.*$/gm, "");
+	assert.doesNotMatch(bare, /OpenStreetMap/);
+	assert.match(body, /AttributionControl\(\{ compact: true \}\)/);
 });
 
 test("map says so when Cloudflare sent no coordinates", async () => {

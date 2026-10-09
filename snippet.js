@@ -99,21 +99,25 @@ const MAP_SCRIPT = (lat, lon, zoom) => `<script>
         // The archive holds zoom 0 to 15. Past 15 it would ask for tiles that
         // are not in the file. scrollWheelZoom stays off, as it was with Leaflet,
         // so a page that scrolls does not zoom the map.
-        maxZoom: 15, scrollWheelZoom: false, attributionControl: false,
+        maxZoom: 15, scrollWheelZoom: false,
+        // The control is added below instead, because the value MapLibre
+        // defaults to carries a "MapLibre" link of its own. This way the only
+        // credit on the map is the one the style names.
+        attributionControl: false,
       });
+      // compact builds a pill holding the credit and an "i" button. The credit is
+      // visible on load, and MapLibre collapses it to the button on the first
+      // drag, which is one of the three collapses the OpenStreetMap attribution
+      // guideline permits. The button brings it back, which is the other half of
+      // that rule. Leave it started open: the same guideline asks for the credit
+      // to be presented with no interaction at all, and this control is now the
+      // only OpenStreetMap credit on either page.
       where.addControl(new maplibregl.AttributionControl({ compact: true }));
 
       new maplibregl.Marker({ color: "#2563eb" })
         .setLngLat([${lon}, ${lat}])
         .setPopup(new maplibregl.Popup().setText(${JSON.stringify(`${lat}, ${lon}`)}))
         .addTo(where);
-      document.getElementById("no-map").addEventListener("click", function (event) {
-        event.preventDefault();
-        where.remove();
-        // The note is there to offer this, so it goes with the map.
-        document.getElementById("map").remove();
-        document.getElementById("note").remove();
-      });
     } catch (error) {
       // WebGL is the one thing MapLibre cannot work without, and a few old
       // browsers and some locked-down setups do not have it.
@@ -128,7 +132,6 @@ const map = (latitude, longitude) => {
 	const lat = String(Number(latitude));
 	const lon = String(Number(longitude));
 	return `<div id="map" role="img" aria-label="Map at ${escapeHtml(latitude)}, ${escapeHtml(longitude)}"></div>
-<p class="note" id="note">Loading a map fetches tiles, labels and code from ${TILES}. <a href="#" id="no-map">Hide the map</a> and stop that.</p>
 ${MAP_LIBRARIES}
 ${MAP_SCRIPT(lat, lon, 5)}`;
 };
@@ -171,15 +174,8 @@ body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-
 html,body{height:100%;margin:0}
 body{font:14px/1.4 system-ui,sans-serif}
 #map{height:100%;width:100%;background:#ddd}
-.note{position:absolute;z-index:1000;left:.5rem;bottom:.5rem;margin:0;padding:.35rem .6rem;border-radius:.25rem;background:rgba(0,0,0,.72);color:#fff;max-width:min(30rem,calc(100vw - 1rem))}
-.note a{color:#cfe3ff}
 </style>
 <div id="map" role="img" aria-label="Map at ${escapeHtml(lat)}, ${escapeHtml(lon)}"></div>
-<p class="note" id="note">Approximate, from your network not a GPS fix.
-<a href="https://github.com/protomaps/basemaps">Protomaps Basemap</a> tiles, derived from
-<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors,
-served from <a href="${TILES}">tiles.jasontally.com</a>.
-<a href="#" id="no-map">Stop loading them</a>.</p>
 ${MAP_LIBRARIES}
 ${MAP_SCRIPT(lat, lon, 6)}
 </html>`;
@@ -215,7 +211,6 @@ code,td{overflow-wrap:anywhere}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font-size:.85rem;background:color-mix(in srgb,currentColor 5%,transparent);padding:.75rem;border-radius:.25rem}
 .none{opacity:.4}
 #map{height:20rem;border-radius:.25rem;margin:0;background:color-mix(in srgb,currentColor 8%,transparent);border:1px solid color-mix(in srgb,currentColor 15%,transparent)}
-.note{font-size:.85rem;margin:.5rem 0 0}
 footer{margin-top:2.5rem;font-size:.85rem;opacity:.6}
 </style>
 <h1>${escapeHtml(ip)}</h1>

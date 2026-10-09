@@ -250,6 +250,23 @@ The style JSON is one of the two that host publishes, `bright.json` and
 `dark.json`, and the page picks between them the way its own CSS already does,
 by the visitor's colour scheme.
 
+**The only credit is the one in the corner.** Neither page carries a note, and
+there is no control that stops the map loading: the credit is MapLibre's
+attribution control, in the lower right, holding what the style names for the
+source, which is "© OpenStreetMap contributors" with a link to the licence. It
+starts visible, and MapLibre collapses it to an "i" button on the first drag. A
+click brings it back. That is deliberate. The OpenStreetMap
+[attribution guideline](https://osmfoundation.org/wiki/Licence/Attribution_Guidelines)
+asks for the credit to be presented with no interaction at all, and allows a
+collapse only on a dismiss, on map interaction, or after five seconds. Starting
+the control collapsed would satisfy none of those, so it stays open. The
+attribution text itself is not written in this repo: it is read from the style
+JSON, which is also what makes the licence link correct.
+
+The map page used to say the position was approximate rather than a GPS fix.
+That line went with the note, so the caveat now sits only in the page title and
+the `aria-label` on the map. Restore it as a `title` if a visitor should see it.
+
 The archive holds zoom 0 to 15, so the map stops at 15 as well; going past it
 would ask for tiles that are not in the file. The style is Protomaps schema v3,
 which is the schema this archive holds: a style written for another schema loads
@@ -566,7 +583,7 @@ this printed "removed" for records that were still there.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 16709 bytes | 32768 | 51% |
+| Source size, as uploaded minified | 16402 bytes | 32768 | 50% |
 | Rule expression | 2308 chars | 4096 | 56% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
@@ -727,7 +744,7 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-30276 bytes -> 16709 bytes, 44.8% smaller, 16059 free of 32768
+29961 bytes -> 16402 bytes, 45.3% smaller, 16366 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs
@@ -735,10 +752,10 @@ committing. Four builds were measured on this file:
 
 | Build | Bytes |
 | --- | --- |
-| esbuild, `--minify` | 16709 |
-| terser, `--compress --mangle` | 16848 |
-| terser, `passes=3` | 16835 |
-| terser, all `unsafe_*` transforms | 16703 |
+| esbuild, `--minify` | 16402 |
+| terser, `--compress --mangle` | 16536 |
+| terser, `passes=3` | 16523 |
+| terser, all `unsafe_*` transforms | 16391 |
 
 esbuild is the default. Terser with every `unsafe_*` transform on is 6 bytes
 smaller, which is 0.02% of the limit, and those transforms can change behaviour.
@@ -753,7 +770,7 @@ bytecode either way.
 
 ```console
 $ npm run bench:runtime
-source 30276 bytes, minified 16709 bytes
+source 29961 bytes, minified 16402 bytes
   colo.jasontally.com      source 0.0208 ms   minified 0.0210 ms
   ip.jasontally.com        source 0.0201 ms   minified 0.0203 ms
 ```
