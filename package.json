@@ -11,6 +11,8 @@
   },
   "scripts": {
     "test": "node --test",
+    "build": "./deploy.sh build",
+    "deploy": "./deploy.sh deploy",
     "bench": "node bench.mjs",
     "bench:cost": "node cost.mjs",
     "bench:runtime": "node runtime.mjs",

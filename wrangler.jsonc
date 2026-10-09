@@ -1,0 +1,17 @@
+{
+  // Workers Builds attaches a repository to a Worker, and the build and deploy
+  // commands configured on that Worker are what run on a push. This is the
+  // Worker that holds the CI for this project, and `name` has to match it
+  // exactly or the build fails on Cloudflare's name check. It is not the
+  // product: the product is the Snippet that ./deploy.sh uploads.
+  //
+  // Cloudflare created this Worker when the repository was imported, and named
+  // it after the repo. Renaming it in the dashboard is fine, as long as this
+  // name changes with it.
+  "name": "icanhazip",
+  "main": "ci-worker.js",
+  "compatibility_date": "2026-10-08",
+  // Nothing needs a public URL for this. The Worker is a shell that holds the
+  // build configuration.
+  "workers_dev": false
+}

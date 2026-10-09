@@ -605,9 +605,10 @@ export CLOUDFLARE_ZONE_ID=b540f8f1930727dace12f79100e7b9d2
 in place. Running it twice is safe, and it leaves other Snippet rules in the
 zone alone.
 
-Two checks guard against a quiet failure. `deploy.sh` stops if the rule
-expression would pass 4096 characters, and it verifies by SHA-256 that the code
-on the edge is the build it sent.
+Three checks guard against a quiet failure. `deploy.sh` stops if the rule
+expression would pass 4096 characters, it verifies by SHA-256 that the code on
+the edge is the build it sent, and it reads the rule list back afterwards to
+prove the other project's rule on this zone survived the update.
 
 It also stops when `CLOUDFLARE_API_TOKEN` is missing. An earlier version only
 warned, so the upload failed without a visible error and the zone sat on old DNS
@@ -623,12 +624,80 @@ Create one at <https://dash.cloudflare.com/profile/api-tokens>:
 | Permission | Access | Why |
 | --- | --- | --- |
 | Zone / Snippets | Edit | upload the code and set the rule |
-| Zone / DNS | Edit | create the 100 AAAA records |
+| Zone / Snippets | Read | read the stored code back to hash it, and read the rule list |
+| Zone / DNS | Edit | create the 100 AAAA records, delete the stale ones |
+| Zone / DNS | Read | list what is there, to find both |
 | Zone / Zone | Read | let `cf` resolve the zone |
 
 Scope it to Zone `jasontally.com`. Account
 `74036ee9a61ce6ac5682b2eade8dfb82` holds the zone. Snippets are zone scoped, so
 the account ID never reaches the Snippets API.
+
+Edit covers Read for the same resource, so an Edit token can do all of it. Both
+halves are needed: this script reads back what it wrote, and a Read-only token
+would fail the write.
+
+### Run the build and the deploy on Cloudflare
+
+`deploy.sh` does two separable things: minify and check the build, then talk to
+the zone. Cloudflare's CI asks for exactly those two things as two commands, so
+the script takes a mode and the token stays in Cloudflare rather than on this
+machine.
+
+| Command | What it does | Needs the token |
+| --- | --- | --- |
+| `./deploy.sh`, or `./deploy.sh all` | build into `dist/`, then deploy | yes |
+| `./deploy.sh build` | minify into `dist/`, then every check that needs no network | no |
+| `./deploy.sh deploy` | deploy what `dist/` holds | yes |
+| `npm run build`, `npm run deploy` | the same two | as above |
+
+`dist/` is in `.gitignore` and is rebuilt every build, so the two commands share
+it through the workspace and never through git. A build stops after the three
+offline checks, so a broken build never reaches the deploy command.
+
+**Workers Builds settings**, under Workers & Pages → the Worker → Settings →
+Builds:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| Build command | `npm run build` | minify, plus the size, host-list and rule-length checks |
+| Deploy command | `npm i -g cf && npm run deploy` | the build image carries no `cf`, and the DNS steps need it |
+| Preview command | `npm run build` | a branch that is not `main` builds and deploys nothing |
+| Production branch | `main` | |
+| Root directory | `/` | this repo is one project, not a monorepo |
+
+**Build variables and secrets**, under Settings → Build → Build variables and
+secrets. They are available to both commands.
+
+| Name | Type | Value |
+| --- | --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Secret | the token from the table above |
+| `CLOUDFLARE_ZONE_ID` | Variable | `b540f8f1930727dace12f79100e7b9d2` |
+
+`CI`, `WORKERS_CI=1` and `WORKERS_CI_BUILD_UUID` are injected for free.
+
+**The Worker this hangs on.** Workers Builds keys every build off a Worker: the
+repository connects to a Worker, and the build and deploy commands are settings
+on that Worker. There is no Snippets-specific CI, and wrangler has no
+`snippets` subcommand, because a Snippet is a zone-level Rules resource rather
+than a Worker artifact. That is why the deploy command here is a package script.
+
+So the repo carries one Worker shell, and it is not the product: `wrangler.jsonc`
+names `icanhazip-ci`, and `ci-worker.js` inside it is three lines that nobody
+routes to. `workers_dev` is off and the deploy command never publishes it
+again. It exists to hold the build configuration. Create it once, then connect
+the repository to it:
+
+```console
+npx wrangler deploy --config wrangler.jsonc
+```
+
+The `name` in `wrangler.jsonc` has to match the Worker in the dashboard, or the
+build fails on Cloudflare's name check before either command runs.
+
+The minifier default differs by machine. This machine puts npm behind `sfw`,
+Cloudflare's build image does not, and `deploy.sh` picks the right one, so
+neither place needs a flag. `MINIFY` still overrides it.
 
 ### The DNS records
 
@@ -823,6 +892,7 @@ and the tiles are never requested. Nothing here measures the map path, and
 | --- | --- |
 | `snippet.js` | the Snippet source, minified on deploy |
 | `deploy.sh` | DNS, code and rule deployment through `cf` |
+| `wrangler.jsonc`, `ci-worker.js` | the Worker shell that Workers Builds hangs the build on |
 | `bench.mjs` | byte and header check against icanhazip.com, plus all 100 hosts live |
 | `reliability.mjs` | asks every host 12 times and ranks it by failures, blanks and latency |
 | `cost.mjs` | measures size, rule size and execution time |

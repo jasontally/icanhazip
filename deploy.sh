@@ -4,11 +4,35 @@
 #   CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ZONE_ID=<zone id> ./deploy.sh
 #
 # Or authenticate once with `cf auth login` and run ./deploy.sh with no token.
+#
+# Three modes, because Cloudflare's CI asks for two commands and this is both of
+# them. Workers Builds has no Snippets support of its own: wrangler has no
+# `snippets` subcommand, and a Snippet is a zone-level Rules resource rather than
+# a Worker artifact. So the build command minifies, the deploy command runs this
+# file in `deploy` mode, and the API token it holds does the rest.
+#
+#   ./deploy.sh          build into dist/, then deploy. The local default.
+#   ./deploy.sh build    minify into dist/ and stop. No token, no zone ID.
+#   ./deploy.sh deploy   deploy what dist/ holds. Fails if dist/ is missing.
+#   npm run build        same as ./deploy.sh build
+#   npm run deploy       same as ./deploy.sh deploy
 set -euo pipefail
 
+# Which half this run does. See the header: `build` is the CI build command and
+# `deploy` is the CI deploy command, and they share the workspace, so dist/
+# written by one is read by the other.
+MODE="${1:-all}"
+case "$MODE" in
+	all | build | deploy) ;;
+	*) echo "usage: $0 [all|build|deploy]" >&2; exit 1 ;;
+esac
+
 ACCOUNT_ID=74036ee9a61ce6ac5682b2eade8dfb82
-: "${CLOUDFLARE_ZONE_ID:?set CLOUDFLARE_ZONE_ID to the zone id}"
-ZONE_ID="$CLOUDFLARE_ZONE_ID"
+# Both deploy modes talk to the zone, so both need the zone ID. A build does not.
+if [ "$MODE" != build ]; then
+	: "${CLOUDFLARE_ZONE_ID:?set CLOUDFLARE_ZONE_ID to the zone id}"
+fi
+ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
 ZONE="${CLOUDFLARE_ZONE_NAME:-jasontally.com}"
 HOST=ip.$ZONE
 SNIPPET_NAME=icanhazip
@@ -25,18 +49,26 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CF=(cf --quiet --zone "$ZONE_ID")
 API="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets"
 
-command -v cf >/dev/null || { echo "cf not found. Install it with: npm i -g cf" >&2; exit 1; }
 command -v node >/dev/null || { echo "node not found" >&2; exit 1; }
+# `cf` is only needed to deploy. The CI build image has no `cf` in it, so the
+# deploy command there installs it first.
+if [ "$MODE" != build ]; then
+	command -v cf >/dev/null || { echo "cf not found. Install it with: npm i -g cf" >&2; exit 1; }
+fi
 
 # Fail before touching anything if the token is not usable. A missing token used
 # to make the code upload fail quietly, which left the zone serving old DNS.
 # CEILING: cf auth login is accepted as an alternative, but this script always
 # uses the token for the raw upload, so it cannot detect that case.
-[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || {
-	echo "CLOUDFLARE_API_TOKEN is not set, so the code upload cannot run." >&2
-	echo "Set it, or sign in first with: cf auth login" >&2
-	exit 1
-}
+# A build skips this: it uploads nothing, so the CI build command runs with no
+# token in its environment at all.
+if [ "$MODE" != build ]; then
+	[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || {
+		echo "CLOUDFLARE_API_TOKEN is not set, so the code upload cannot run." >&2
+		echo "Set it, or sign in first with: cf auth login" >&2
+		exit 1
+	}
+fi
 
 step() { printf '\n== %s\n' "$1"; }
 
@@ -51,42 +83,74 @@ expression_from() {
 	' "$1" "$ZONE"
 }
 
-step "Checking the token"
-verify="$(curl -fsS "https://api.cloudflare.com/client/v4/user/tokens/verify" \
-	-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")" \
-	|| die "the token was rejected by Cloudflare"
-printf '%s' "$verify" | grep -q '"status":"active"' \
-	|| die "the token is not active: $verify"
-echo "  token active"
-
-step "Minifying $SNIPPET_NAME.js"
-# The uploaded code is minified, because the 32768 byte limit applies to what
-# Cloudflare stores. snippet.js stays readable and is what the tests import.
-build="$(mktemp -d)"
-trap 'rm -rf "$build"' EXIT
-# Minifier. esbuild is fetched on demand through sfw, so there is no dependency
-# to install and nothing to commit. Set MINIFY to use a local copy instead.
+# A build needs no token: nothing is read and nothing is deployed. Both of the
+# other modes do, and they are the ones that touch the zone.
 #
-# Measured on this file.
-#   esbuild        16709 bytes
-#   terser plain   16848 bytes
-#   terser p3      16835 bytes
-#   terser max     16703 bytes   6 bytes smaller than esbuild, 0.02%
-#
-# esbuild is the default. The 6 byte difference is noise against a 32768 byte
-# limit, and esbuild does not use the unsafe_* transforms that terser max needs,
-# so it is the safer build. Minification does not change run time either, see
-# runtime.mjs. MINIFY='sfw npx --yes terser' with TERSER_FLAGS will switch.
-if [ -z "${SFW_SKIP_UPDATE_CHECK:-}" ]; then
-	export SFW_SKIP_UPDATE_CHECK=1
+# The deploy half also needs what the build half wrote. That is checked here,
+# before the network, so a build that produced nothing fails with its own
+# message rather than on a token verification.
+if [ "$MODE" = deploy ]; then
+	[ -f "$ROOT/dist/snippet.js" ] \
+		|| die "$ROOT/dist/snippet.js is missing. Run 'npm run build' first."
 fi
-MINIFY="${MINIFY:-sfw npx --yes esbuild}"
-# shellcheck disable=SC2086
-$MINIFY "$ROOT/snippet.js" --format=esm --minify --log-level=warning \
-	--outfile="$build/snippet.js" || die "the minifier failed"
+if [ "$MODE" != build ]; then
+	step "Checking the token"
+	verify="$(curl -fsS "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+		-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")" \
+		|| die "the token was rejected by Cloudflare"
+	printf '%s' "$verify" | grep -q '"status":"active"' \
+		|| die "the token is not active: $verify"
+	echo "  token active"
+fi
+
+build="$ROOT/dist"
+built="$build/snippet.js"
+if [ "$MODE" = deploy ]; then
+	# The build command already wrote this. Every check below still has to hold,
+	# or a dist/ left over from another branch would deploy itself.
+	step "Using the build in $built"
+else
+	# Minifier. esbuild is fetched on demand, so there is no dependency to
+	# install and nothing to commit. Set MINIFY to use a local copy instead.
+	#
+	# sfw is the socket firewall this machine puts npm behind. It is not in
+	# Cloudflare's build image, where plain npm works, so the default depends on
+	# which one is present and neither place has to remember a flag.
+	#
+	# Measured on this file.
+	#   esbuild        16709 bytes
+	#   terser plain   16848 bytes
+	#   terser p3      16835 bytes
+	#   terser max     16703 bytes   6 bytes smaller than esbuild, 0.02%
+	#
+	# esbuild is the default. The 6 byte difference is noise against a 32768 byte
+	# limit, and esbuild does not use the unsafe_* transforms that terser max
+	# needs, so it is the safer build. Minification does not change run time
+	# either, see runtime.mjs. MINIFY='npx --yes terser' will switch.
+	step "Building $SNIPPET_NAME.js"
+	# The uploaded code is minified, because the 32768 byte limit applies to what
+	# Cloudflare stores. snippet.js stays readable and is what the tests import.
+	#
+	# dist/ is where the build lands, and it is in .gitignore: every build
+	# regenerates it. `deploy` reads what `build` wrote, which is what lets the
+	# two run as separate commands in the same workspace.
+	if [ -z "${MINIFY:-}" ]; then
+		if command -v sfw >/dev/null 2>&1; then
+			MINIFY="sfw npx --yes esbuild"
+			# sfw fails on its root-owned cache without this.
+			export SFW_SKIP_UPDATE_CHECK=1
+		else
+			MINIFY="npx --yes esbuild"
+		fi
+	fi
+	mkdir -p "$build"
+	# shellcheck disable=SC2086
+	$MINIFY "$ROOT/snippet.js" --format=esm --minify --log-level=warning \
+		--outfile="$built" || die "the minifier failed"
+fi
 
 source_bytes=$(wc -c <"$ROOT/snippet.js")
-built_bytes=$(wc -c <"$build/snippet.js")
+built_bytes=$(wc -c <"$built")
 [ "$built_bytes" -le "$MAX_SOURCE" ] \
 	|| die "minified source is $built_bytes bytes, over the $MAX_SOURCE limit"
 printf '  %s bytes -> %s bytes (%.0f%% smaller), %s free of %s\n' \
@@ -102,7 +166,7 @@ import { hostLabels } from "'"$ROOT"'/snippet.js";
 process.stdout.write(hostLabels.join("\n"));
 ')"
 built_labels="$(node --input-type=module -e '
-import { hostLabels } from "'"$build"'/snippet.js";
+import { hostLabels } from "'"$built"'";
 process.stdout.write(hostLabels.join("\n"));
 ')"
 [ "$labels" = "$built_labels" ] \
@@ -114,6 +178,14 @@ size=${#expression}
 	|| die "rule expression is $size characters, over the $MAX_EXPRESSION limit. Split the hosts across a second Snippet."
 count="$(printf '%s\n' "$labels" | grep -c .)"
 echo "  rule expression $size of $MAX_EXPRESSION characters, $count hosts"
+
+# Everything that can be checked without touching the zone now has been, so a
+# build stops here. The CI build command fails on any of the three checks above,
+# so a broken build never reaches the deploy command.
+if [ "$MODE" = build ]; then
+	echo "  built $built"
+	exit 0
+fi
 
 step "DNS: $count records, AAAA -> $ORIGIN (proxied)"
 while read -r label; do
@@ -222,8 +294,11 @@ fi
 
 step "Snippet rule: $count hosts"
 # PUT replaces the whole rule list, so keep every rule that is already there.
+# Two projects put Snippets on this zone: icanhazip and mcp_lookup. A single-rule
+# list would delete the other one, so the list is merged rather than replaced.
 rules_file="$(mktemp)"
-trap 'rm -f "$rules_file"' EXIT
+after_file="$(mktemp)"
+trap 'rm -f "$rules_file" "$after_file"' EXIT
 "${CF[@]}" snippets rules list >"$rules_file"
 node --input-type=module -e '
 import { readFileSync, writeFileSync } from "node:fs";
@@ -240,6 +315,28 @@ writeFileSync(process.argv[1], JSON.stringify({ rules: [...kept, mine] }, null, 
 # CEILING: --rules wants the JSON array itself, so a temp path does not work
 # here. --body takes the {"rules": [...]} object and does accept @path.
 "${CF[@]}" snippets rules update --body "@$rules_file"
+
+# Read the list back and prove the rules this project does not own survived. A
+# PUT that drops one answers 200 with the shorter list, so there is no other way
+# to see it. Same shape as the DNS delete check above: confirm the state rather
+# than trusting the reply. It matters more now that this runs unattended.
+"${CF[@]}" snippets rules list >"$after_file"
+if ! node --input-type=module -e '
+import { readFileSync } from "node:fs";
+const names = (path) => {
+	const rules = JSON.parse(readFileSync(path, "utf8"));
+	return new Set((rules.result ?? rules).map((rule) => rule.snippet_name));
+};
+const before = names(process.argv[1]);
+const after = names(process.argv[2]);
+const lost = [...before].filter((name) => !after.has(name));
+if (lost.length > 0) {
+	console.error(`the rule update dropped rule(s) this project does not own: ${lost.join(", ")}`);
+	process.exit(1);
+}
+' "$rules_file" "$after_file"; then
+	die "restore the dropped rule from the API before anything else"
+fi
 
 step "Done"
 echo "  curl https://$HOST"
