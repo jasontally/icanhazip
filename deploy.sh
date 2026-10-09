@@ -309,7 +309,17 @@ const mine = {
 	snippet_name: "icanhazip",
 };
 const current = JSON.parse(readFileSync(process.argv[1], "utf8"));
-const kept = (current.result ?? current).filter((rule) => rule.snippet_name !== mine.snippet_name);
+// A list has arrived as a bare array, as {result: [...]}, as {rules: [...]},
+// and once as {result: null} when the list call itself had already failed.
+// Read all of them, and refuse anything else: writing a shorter rule list from
+// a failed read would delete a rule this project does not own. The check after
+// the PUT reads the same shapes.
+const first = current?.result ?? current?.rules ?? current;
+const list = Array.isArray(first) ? first : (first?.rules ?? first?.result);
+if (!Array.isArray(list)) {
+	throw new Error(`the rule list did not come back as a list: ${JSON.stringify(current).slice(0, 400)}`);
+}
+const kept = list.filter((rule) => rule.snippet_name !== mine.snippet_name);
 writeFileSync(process.argv[1], JSON.stringify({ rules: [...kept, mine] }, null, 2));
 ' "$rules_file" "$expression"
 # CEILING: --rules wants the JSON array itself, so a temp path does not work
@@ -320,22 +330,48 @@ writeFileSync(process.argv[1], JSON.stringify({ rules: [...kept, mine] }, null, 
 # PUT that drops one answers 200 with the shorter list, so there is no other way
 # to see it. Same shape as the DNS delete check above: confirm the state rather
 # than trusting the reply. It matters more now that this runs unattended.
-"${CF[@]}" snippets rules list >"$after_file"
-if ! node --input-type=module -e '
+#
+# Two shapes have been seen from `cf snippets rules list`: a bare array, and an
+# envelope. The first read of this check crashed on an envelope whose `result`
+# was null, because the list call had failed and null coalesces straight past to
+# the envelope. Both shapes are read here, an unknown one prints what arrived,
+# and a read that will not parse is retried, because a flaky read-back here
+# would turn a deploy that already succeeded red.
+after_file="$build/rules-after.json"
+lost_file="$build/rules-lost.txt"
+for attempt in 1 2 3; do
+	"${CF[@]}" snippets rules list >"$after_file" 2>/dev/null || true
+	if node --input-type=module -e '
 import { readFileSync } from "node:fs";
+// A list may arrive bare, or wrapped once in `result` or `rules`, or wrapped
+// twice as {result: {rules: [...]}}. All of them end up here as an array.
+const listOf = (body) => {
+	const first = body?.result ?? body?.rules ?? body;
+	const second = first?.rules ?? first?.result;
+	return Array.isArray(first) ? first : Array.isArray(second) ? second : first;
+};
 const names = (path) => {
-	const rules = JSON.parse(readFileSync(path, "utf8"));
-	return new Set((rules.result ?? rules).map((rule) => rule.snippet_name));
+	const list = listOf(JSON.parse(readFileSync(path, "utf8")));
+	if (!Array.isArray(list)) {
+		console.error(`the rule list did not come back as a list: ${JSON.stringify(list).slice(0, 400)}`);
+		process.exit(2);
+	}
+	return new Set(list.map((rule) => rule.snippet_name));
 };
 const before = names(process.argv[1]);
 const after = names(process.argv[2]);
 const lost = [...before].filter((name) => !after.has(name));
-if (lost.length > 0) {
-	console.error(`the rule update dropped rule(s) this project does not own: ${lost.join(", ")}`);
-	process.exit(1);
-}
-' "$rules_file" "$after_file"; then
-	die "restore the dropped rule from the API before anything else"
+if (lost.length > 0) process.stdout.write(lost.join(", "));
+' "$rules_file" "$after_file" >"$lost_file"; then
+		break
+	fi
+	if [ "$attempt" = 3 ]; then
+		die "could not read the rule list back, so it cannot be shown that the other project's rule survived. $(head -c 300 "$after_file")"
+	fi
+	sleep 2
+done
+if [ -s "$lost_file" ]; then
+	die "the rule update dropped rule(s) this project does not own: $(cat "$lost_file"). Restore them from the API before anything else."
 fi
 
 step "Done"
