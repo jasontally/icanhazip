@@ -263,6 +263,15 @@ the control collapsed would satisfy none of those, so it stays open. The
 attribution text itself is not written in this repo: it is read from the style
 JSON, which is also what makes the licence link correct.
 
+Two of the three permitted collapses were measured in a browser, on both pages:
+clicking the credit while it is open collapses it, and one drag collapses it. In
+both cases the "i" button stays and brings the credit back, which is the
+"user must still be able to find the licence information" half of the same rule.
+The third, a five second timer, does not exist and is not wanted: the guideline
+permits any one of the three rather than all three, and this build already
+collapses on the two that need no code. A timer would hide the credit sooner for
+someone who is still reading it.
+
 The map page used to say the position was approximate rather than a GPS fix.
 That line went with the note, so the caveat now sits only in the page title and
 the `aria-label` on the map. Restore it as a `title` if a visitor should see it.
