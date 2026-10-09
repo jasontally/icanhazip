@@ -549,10 +549,10 @@ judgement call, because a hash of the ciphers is not a hash of the browser.
 | `api.open-meteo.com` | 16 | yes, Open-Meteo in Switzerland | 10,000 a day on the free tier |
 | tiles.jasontally.com | `map` and `/whoami` | yes, own hostname on this zone | none published, no SLA |
 
-71 of the 100 never leave Cloudflare. 28 reach a third party, and 1 returns a
-page. The five DNS hosts are not rate limited and are the most dependable of the
-third party group, since they run on Cloudflare's own resolver in the same
-network as the Snippet itself.
+71 of the 100 never leave Cloudflare. 23 reach a third party, 5 use Cloudflare's
+own resolver, and 1 returns a page. The five DNS hosts are not rate limited and
+are the most dependable of the third party group, since they run on Cloudflare's
+own resolver in the same network as the Snippet itself.
 
 **`request.cf` carries 32 keys on this plan, not more.** That was measured from
 the live edge, not taken from the documentation, and the number matters: 40 of
@@ -919,6 +919,7 @@ and the tiles are never requested. Nothing here measures the map path, and
 | `snippet.js` | the Snippet source, minified on deploy |
 | `deploy.sh` | DNS, code and rule deployment through `cf` |
 | `wrangler.jsonc`, `ci-worker.js` | the Worker shell that Workers Builds hangs the build on |
+| `DEPENDENCIES.md` | the plan for investigating the remaining third-party dependencies |
 | `bench.mjs` | byte and header check against icanhazip.com, plus all 100 hosts live |
 | `reliability.mjs` | asks every host 12 times and ranks it by failures, blanks and latency |
 | `cost.mjs` | measures size, rule size and execution time |
