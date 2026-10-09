@@ -230,26 +230,37 @@ $ curl -o /dev/null -w '%{http_code} %{size_download}\n' https://map.jasontally.
 200 1920
 ```
 
-It uses the same SRI-pinned Leaflet as `/whoami`, where the map sits under
-Location.
+It uses the same SRI-pinned map libraries as `/whoami`, where the map sits
+under Location.
 
-**Rate limits and policy.** Leaflet comes from unpkg.com, a public CDN with no
-published limit, and SRI pins the exact bytes, so a tampered copy fails to load
-rather than runs. Tiles come from `tile.openstreetmap.org`, run on donations
-with no SLA. The [tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
-requires visible attribution, a valid `Referer` header on web requests, and no
-prefetching, and it says access may be withdrawn without notice if usage
-degrades the service for others. Three obligations follow from that and all
-three are met: attribution is in the corner, `Referrer-Policy` is `origin` so
-the header is sent while the path stays private, and only tiles for the current
-viewport are fetched. What is not bounded is volume, so a popular page here
-costs real money from someone else.
+**Where the map comes from.** Everything a map needs is on one host,
+`tiles.jasontally.com`: MapLibre GL JS and the PMTiles reader, the styles, the
+glyph files and the tiles themselves. There is no unpkg.com, no
+`tile.openstreetmap.org` and no third party of any kind, so the page no longer
+trades its privacy for a map. The tiles are the Protomaps Basemap, an
+OpenStreetMap rebuild served as one PMTiles archive, and MapLibre GL JS reads
+them, which needs WebGL. Where a browser has none, the page says so instead of
+showing an empty box.
+
+All three files load with Subresource Integrity, which pins the exact bytes and
+makes a tampered copy fail to load rather than run. The versions are pinned by
+path, so the bytes under a URL cannot change while the URL stays the same.
+
+The style JSON is one of the two that host publishes, `bright.json` and
+`dark.json`, and the page picks between them the way its own CSS already does,
+by the visitor's colour scheme.
+
+The archive holds zoom 0 to 15, so the map stops at 15 as well; going past it
+would ask for tiles that are not in the file. The style is Protomaps schema v3,
+which is the schema this archive holds: a style written for another schema loads
+and then draws nothing.
 
 Upstream
 [cf-whoami-snippet](https://github.com/xyTom/cf-whoami-snippet) does neither; it
-builds only an OpenStreetMap URL, which this project also carries as a plain
-link beside the map. When Cloudflare sends no coordinates, both pages say so
-instead of showing an empty map.
+builds only an OpenStreetMap URL. This project used to carry that as a plain
+link beside the map, and no longer does, because a link is the last thing that
+led a visitor off to a third party. When Cloudflare sends no coordinates, both
+pages say so instead of showing an empty map.
 
 ### Replacements for the services Major retired
 
@@ -510,7 +521,7 @@ judgement call, because a hash of the ciphers is not a hash of the browser.
 | `cloudflare-dns.com` | 5 | no, stays inside Cloudflare | no |
 | `stat.ripe.net` | 7 | yes, RIPE NCC | 8 concurrent, register above 1000 a day |
 | `api.open-meteo.com` | 16 | yes, Open-Meteo in Switzerland | 10,000 a day on the free tier |
-| unpkg.com, tile.openstreetmap.org | `map` and `/whoami` | yes, for the page only | tiles: none published, may be withdrawn |
+| tiles.jasontally.com | `map` and `/whoami` | yes, own hostname on this zone | none published, no SLA |
 
 71 of the 100 never leave Cloudflare. 28 reach a third party, and 1 returns a
 page. The five DNS hosts are not rate limited and are the most dependable of the
@@ -555,7 +566,7 @@ this printed "removed" for records that were still there.
 
 | Limit | Now | Allowed | Used |
 | --- | --- | --- | --- |
-| Source size, as uploaded minified | 16356 bytes | 32768 | 50% |
+| Source size, as uploaded minified | 16709 bytes | 32768 | 51% |
 | Rule expression | 2308 chars | 4096 | 56% |
 | Execution time | 0.03 ms | 5 ms | 0.6% |
 
@@ -647,23 +658,22 @@ minifies with [esbuild](https://esbuild.github.io/) and uploads the result,
 since the 32768 byte limit applies to whatever Cloudflare stores.
 
 ```
-29437 bytes -> 16356 bytes, 44.4% smaller, 16412 free of 32768
+30276 bytes -> 16709 bytes, 44.8% smaller, 16059 free of 32768
 ```
 
 esbuild arrives through `sfw npx`, so nothing needs installing and nothing needs
-committing. Four builds were measured on this file and all four passed all 45
-tests.
+committing. Four builds were measured on this file:
 
-| Build | Bytes | Time |
-| --- | --- | --- |
-| esbuild, `--minify` | 14874 | 1.6 s |
-| terser, `--compress --mangle` | 14992 | 2.0 s |
-| terser, `passes=3` | 14979 | 2.0 s |
-| terser, all `unsafe_*` transforms | 14848 | 2.0 s |
+| Build | Bytes |
+| --- | --- |
+| esbuild, `--minify` | 16709 |
+| terser, `--compress --mangle` | 16848 |
+| terser, `passes=3` | 16835 |
+| terser, all `unsafe_*` transforms | 16703 |
 
-esbuild is the default. It loses 26 bytes to terser with every `unsafe_*`
-transform on, which is 0.08% of the limit, and those transforms can change
-behaviour. Switch with `MINIFY`:
+esbuild is the default. Terser with every `unsafe_*` transform on is 6 bytes
+smaller, which is 0.02% of the limit, and those transforms can change behaviour.
+Switch with `MINIFY`:
 
 ```console
 $ MINIFY='sfw npx --yes terser' ./deploy.sh
@@ -674,7 +684,7 @@ bytecode either way.
 
 ```console
 $ npm run bench:runtime
-source 26312 bytes, minified 14874 bytes
+source 30276 bytes, minified 16709 bytes
   colo.jasontally.com      source 0.0208 ms   minified 0.0210 ms
   ip.jasontally.com        source 0.0201 ms   minified 0.0203 ms
 ```
@@ -688,8 +698,8 @@ npm test
 `node --test` runs against a fake `Request`, so no network or account is needed.
 It covers both response shapes, the date and weather splits, the `Number()`
 guard that stops a hostile coordinate reaching the script block, the `origin`
-Referrer-Policy that the tile policy needs, and the WMO table, which is read
-through the module so it also passes on a minified build.
+Referrer-Policy that keeps the path out of the tile requests, and the WMO table,
+which is read through the module so it also passes on a minified build.
 
 One test is worth naming. **Every `request.cf` field the snippet reads really
 exists.** It scans the whole file rather than one map, because the details page
@@ -802,9 +812,10 @@ local metadata. The HTML pages run about half the throughput of a plain value,
 1987 against 3012 req/s at 128 concurrent, which is the 8.9 KB of HTML rather
 than 13 bytes.
 
-A caveat on the `page` profile. Node fetch does not run JavaScript, so Leaflet
-and the OSM tiles are never requested. Nothing here measures the tile path, and
-`/whoami` as a browser sees it makes two further third party requests.
+A caveat on the `page` profile. Node fetch does not run JavaScript, so MapLibre
+and the tiles are never requested. Nothing here measures the map path, and
+`/whoami` as a browser sees it fetches three more files from
+`tiles.jasontally.com` before it draws anything.
 
 ## Files
 

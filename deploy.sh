@@ -67,13 +67,13 @@ trap 'rm -rf "$build"' EXIT
 # Minifier. esbuild is fetched on demand through sfw, so there is no dependency
 # to install and nothing to commit. Set MINIFY to use a local copy instead.
 #
-# Measured on this file. All four builds passed all 45 tests.
-#   esbuild        14874 bytes   1.6 s
-#   terser plain   14992 bytes   2.0 s
-#   terser p3      14979 bytes   2.0 s
-#   terser max     14848 bytes   2.0 s   26 bytes smaller than esbuild, 0.08%
+# Measured on this file.
+#   esbuild        16709 bytes
+#   terser plain   16848 bytes
+#   terser p3      16835 bytes
+#   terser max     16703 bytes   6 bytes smaller than esbuild, 0.02%
 #
-# esbuild is the default. The 26 byte difference is noise against a 32768 byte
+# esbuild is the default. The 6 byte difference is noise against a 32768 byte
 # limit, and esbuild does not use the unsafe_* transforms that terser max needs,
 # so it is the safer build. Minification does not change run time either, see
 # runtime.mjs. MINIFY='sfw npx --yes terser' with TERSER_FLAGS will switch.

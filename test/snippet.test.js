@@ -114,7 +114,7 @@ test("?whoami returns an HTML page with the request details", async () => {
 	assert.match(body, /<th>User agent<\/th><td>curl\/8\.5\.0<\/td>/);
 	assert.doesNotMatch(body, /&quot;0&quot;: \[/);
 	// The map link must be a real anchor, not escaped text.
-	assert.match(body, /<a href="https:\/\/www\.openstreetmap\.org\/\?mlat=30\.2672/);
+	assert.match(body, /<div id="map" role="img" aria-label="Map at 30\.2672, -97\.7431"/);
 	// The raw Cloudflare object is dumped, so new fields appear with no code change.
 	assert.match(body, /&quot;botManagement&quot;/);
 });
@@ -197,50 +197,69 @@ test("the whoami page links the edge trace, for the fields it cannot show", asyn
 	assert.doesNotMatch(body, /href="https:\/\/[^"]*cdn-cgi\/trace"/);
 });
 
-test("both map pages send a Referer, as the OSM tile policy requires", async () => {
-	// The tile usage policy forbids a Referrer-Policy that stops the Referer
-	// header reaching tile.openstreetmap.org, and says referer-stripping
-	// traffic may be blocked without notice. "origin" satisfies both: the
-	// header is sent, and it carries the origin only, never the path.
+test("both map pages send a Referer that carries the origin only", async () => {
+	// "origin" is the one policy that both answers the reason this used to
+	// exist and the reason it still does. The old reason was the OSM tile usage
+	// policy, which required a valid Referer and withdrew access without notice
+	// from traffic that stripped it. The tiles are now served by this zone, so
+	// no policy asks for anything. What stays is that a Referer of origin only
+	// never carries the path or the query string, which is the part of this
+	// URL that can hold something about the visitor.
 	for (const target of ["https://ip.jasontally.com/whoami", "https://map.jasontally.com/"]) {
 		const body = await (await call(target)).text();
 		const tags = [...body.matchAll(/<meta name="referrer" content="([^"]+)">/g)];
 		assert.equal(tags.length, 1, `${target} needs one referrer meta tag`);
-		assert.equal(tags[0][1], "origin", `${target} must not strip the Referer`);
+		assert.equal(tags[0][1], "origin", `${target} must send the origin and no path`);
 	}
 });
 
-test("the whoami page embeds a map with pinned Leaflet and a marker", async () => {
+test("the whoami page embeds a map with pinned libraries and a marker", async () => {
 	const response = await call("https://ip.jasontally.com/whoami");
 	const body = await response.text();
 
 	assert.match(body, /<div id="map"/);
-	assert.match(body, /leaflet@1\.9\.4\/dist\/leaflet\.js/);
-	// Subresource Integrity must pin both files.
-	assert.match(body, /leaflet\.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2\/Z9VM\+kNiyxNV1lvTlZBo="/);
-	assert.match(body, /leaflet\.css" integrity="sha256-p4NxAoJBhIIN\+hmNHrzRCf9tD\/miZyoHS5obTRR9BMY="/);
+	// MapLibre and the PMTiles reader, from the same host as the tiles.
+	assert.match(body, /vendor\/maplibre-gl\.js/);
+	assert.match(body, /vendor\/pmtiles\.js/);
+	assert.match(body, /vendor\/maplibre-gl\.css/);
+	// Subresource Integrity must pin all three files.
+	assert.match(body, /maplibre-gl\.js" integrity="sha384-5\+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp"/);
+	assert.match(body, /maplibre-gl\.css" integrity="sha384-uTttxo\/aOKbdE5RlD\/SPzSDoDmNvGlUYPjONi2MN\/b7c9HPSvW07OIuyP7uL6jxK"/);
+	assert.match(body, /pmtiles\.js" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0\+JGZ5H\+3mfzVIp6zsQNkTsfGJot93"/);
 	assert.match(body, /crossorigin=""/);
-	// The coordinates reach Leaflet as numbers, not as strings from the CF object.
-	assert.match(body, /setView\(\[30\.2672, -97\.7431\], 5\)/);
-	assert.match(body, /circleMarker\(\[30\.2672, -97\.7431\]/);
-	assert.match(body, /tile\.openstreetmap\.org/);
-	assert.match(body, /OpenStreetMap contributors/);
+	// The style, which is where the glyph URL comes from. Both flavours, so
+	// the map follows the visitor's colour scheme like the page CSS does.
+	assert.match(body, /styles\/bright\.json/);
+	assert.match(body, /styles\/dark\.json/);
+	// The coordinates reach MapLibre as numbers, not as strings from the CF
+	// object. MapLibre takes longitude first, the other way round from Leaflet.
+	assert.match(body, /center: \[-97\.7431, 30\.2672\], zoom: 5/);
+	assert.match(body, /setLngLat\(\[-97\.7431, 30\.2672\]\)/);
+	assert.match(body, /maxZoom: 15/);
+	// The archive is Protomaps schema v3, so the style must be one of the two
+	// written for it. A style for another schema draws nothing at all.
+	assert.match(body, /attributionControl: false/);
+	assert.match(body, /AttributionControl\(\{ compact: true \}\)/);
+	// Nothing is fetched from any host but our own.
+	assert.doesNotMatch(body, /unpkg\.com|tile\.openstreetmap\.org|demotiles|maplibre\.org/);
 });
 
-test("the page warns that the map calls third parties, and offers a way out", async () => {
+test("the page says where the map comes from, and offers a way out", async () => {
 	const body = await (await call("https://ip.jasontally.com/whoami")).text();
 
-	assert.match(body, /unpkg\.com and tile\.openstreetmap\.org/);
+	assert.match(body, /tiles\.jasontally\.com/);
 	assert.match(body, /id="no-map"/);
 	assert.match(body, /where\.remove\(\)/);
 });
 
-test("no coordinates means no map and no Leaflet", async () => {
+test("no coordinates means no map and no libraries", async () => {
 	const body = await (
 		await call("https://ip.jasontally.com/whoami", { cf: { ...CF, latitude: undefined, longitude: undefined } })
 	).text();
 
-	assert.doesNotMatch(body, /leaflet/);
+	assert.doesNotMatch(body, /maplibregl/);
+	assert.doesNotMatch(body, /pmtiles/);
+	assert.doesNotMatch(body, /vendor\//);
 	assert.doesNotMatch(body, /<div id="map"/);
 	assert.match(body, /&mdash;<\/span>/);
 });
@@ -275,12 +294,12 @@ test("hostile coordinates cannot break out of the script block", async () => {
 	const script = body.slice(body.lastIndexOf("<script>"), body.lastIndexOf("</script>"));
 
 	// Nothing from the coordinates may reach the script as code. Number()
-	// drops the injected text, so Leaflet gets a real number or NaN.
+	// drops the injected text, so MapLibre gets a real number or NaN.
 	assert.doesNotMatch(script, /alert\(1\)/);
-	assert.match(script, /setView\(\[NaN, -97\.7\], 5\)/);
-	assert.match(script, /circleMarker\(\[NaN, -97\.7\]/);
+	assert.match(script, /center: \[-97\.7, NaN\], zoom: 5/);
+	assert.match(script, /setLngLat\(\[-97\.7, NaN\]\)/);
 	// The popup label is built from those numbers, so it cannot carry the text.
-	assert.match(script, /\.bindPopup\("NaN, -97\.7"\)/);
+	assert.match(script, /\.setText\("NaN, -97\.7"\)/);
 });
 
 test("the date and time hosts split the ISO timestamp", async () => {
@@ -356,9 +375,14 @@ test("map.jasontally.com is the whole map, not a value", async () => {
 	assert.doesNotMatch(body, /Cloudflare colo/);
 	assert.match(body, /<div id="map"/);
 	assert.match(body, /#map\{height:100%;width:100%/);
-	assert.match(body, /setView\(\[30\.2672, -97\.7431\], 6\)/);
-	assert.match(body, /tile\.openstreetmap\.org/);
-	assert.match(body, /leaflet\.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2\/Z9VM\+kNiyxNV1lvTlZBo="/);
+	assert.match(body, /center: \[-97\.7431, 30\.2672\], zoom: 6/);
+	assert.match(body, /setLngLat\(\[-97\.7431, 30\.2672\]\)/);
+	assert.match(body, /styles\/bright\.json/);
+	assert.match(body, /styles\/dark\.json/);
+	assert.match(body, /maplibre-gl\.js" integrity="sha384-5\+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp"/);
+	assert.match(body, /pmtiles\.js" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0\+JGZ5H\+3mfzVIp6zsQNkTsfGJot93"/);
+	// The map data is credited here and again in the attribution control.
+	assert.match(body, /OpenStreetMap<\/a> contributors/);
 });
 
 test("map says so when Cloudflare sent no coordinates", async () => {
@@ -378,7 +402,8 @@ test("map coordinates cannot break out of the script block", async () => {
 
 	const script = body.slice(body.lastIndexOf("<script>"), body.lastIndexOf("</script>"));
 	assert.doesNotMatch(script, /alert\(1\)/);
-	assert.match(script, /setView\(\[NaN, -97\.7431\], 6\)/);
+	assert.match(script, /center: \[-97\.7431, NaN\], zoom: 6/);
+	assert.match(script, /setLngLat\(\[-97\.7431, NaN\]\)/);
 });
 
 test("the reverse DNS name builders handle both address families", async () => {

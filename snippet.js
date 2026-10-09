@@ -28,17 +28,9 @@ const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
 const escapeHtml = (value) =>
 	String(value ?? "").replace(/[&<>"]/g, (char) => ESCAPES[char]);
 
-// Marks a value as trusted markup, so `show` does not escape it.
-const RAW = Symbol("raw");
-
-const raw = (html) => ({ [RAW]: html });
-
 const show = (value) => {
 	if (value === null || value === undefined || value === "") {
 		return '<span class="none">&mdash;</span>';
-	}
-	if (typeof value === "object" && RAW in value) {
-		return value[RAW];
 	}
 	if (typeof value === "object") {
 		return `<code>${escapeHtml(JSON.stringify(value))}</code>`;
@@ -78,11 +70,57 @@ const json = (body) =>
 // "no proxy" apart from "empty". Returning a line would lose that.
 const noContent = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
 
-// Leaflet is 45 KB, over the 32 KB Snippet limit, so it loads from a CDN.
-// SRI pins the exact bytes. Loading it makes this page contact unpkg.com and
-// tile.openstreetmap.org, so the page is no longer private to the visitor.
-const LEAFLET = `<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>`;
+// A map here is three files, and all three are far over the 32 KB Snippet
+// limit, so all three load over the network. They come from
+// tiles.jasontally.com, which also serves the tiles, the glyphs and the style
+// JSON, so one map is one hostname and no third party sees the visit.
+// SRI pins the exact bytes: a tampered copy fails to load rather than runs.
+const TILES = "https://tiles.jasontally.com";
+const MAP_LIBRARIES = `<link rel="stylesheet" href="${TILES}/vendor/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="">
+<script src="${TILES}/vendor/maplibre-gl.js" integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin=""></script>
+<script src="${TILES}/vendor/pmtiles.js" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0+JGZ5H+3mfzVIp6zsQNkTsfGJot93" crossorigin=""></script>`;
+
+// One map, built the same way on both pages that carry one. The style JSON
+// holds the glyph URL, so tiles, labels and code all come from
+// tiles.jasontally.com. It is a Protomaps schema v3 style, which is the schema
+// this archive holds.
+const MAP_SCRIPT = (lat, lon, zoom) => `<script>
+  window.addEventListener("load", function () {
+    // The page CSS already follows the visitor's colour scheme, so the map
+    // does too. Both styles are the same map with different paint.
+    var style = window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "${TILES}/styles/dark.json"
+      : "${TILES}/styles/bright.json";
+    try {
+      var protocol = new pmtiles.Protocol();
+      maplibregl.addProtocol("pmtiles", protocol.tile);
+      var where = new maplibregl.Map({
+        container: "map", style: style, center: [${lon}, ${lat}], zoom: ${zoom},
+        // The archive holds zoom 0 to 15. Past 15 it would ask for tiles that
+        // are not in the file. scrollWheelZoom stays off, as it was with Leaflet,
+        // so a page that scrolls does not zoom the map.
+        maxZoom: 15, scrollWheelZoom: false, attributionControl: false,
+      });
+      where.addControl(new maplibregl.AttributionControl({ compact: true }));
+
+      new maplibregl.Marker({ color: "#2563eb" })
+        .setLngLat([${lon}, ${lat}])
+        .setPopup(new maplibregl.Popup().setText(${JSON.stringify(`${lat}, ${lon}`)}))
+        .addTo(where);
+      document.getElementById("no-map").addEventListener("click", function (event) {
+        event.preventDefault();
+        where.remove();
+        // The note is there to offer this, so it goes with the map.
+        document.getElementById("map").remove();
+        document.getElementById("note").remove();
+      });
+    } catch (error) {
+      // WebGL is the one thing MapLibre cannot work without, and a few old
+      // browsers and some locked-down setups do not have it.
+      document.getElementById("map").textContent = "This browser cannot draw the map.";
+    }
+  });
+</script>`;
 
 const map = (latitude, longitude) => {
 	// Coordinates come from Cloudflare, but they go inside a script block, so
@@ -90,25 +128,9 @@ const map = (latitude, longitude) => {
 	const lat = String(Number(latitude));
 	const lon = String(Number(longitude));
 	return `<div id="map" role="img" aria-label="Map at ${escapeHtml(latitude)}, ${escapeHtml(longitude)}"></div>
-<p class="note">Loading a map sends this visit to unpkg.com and tile.openstreetmap.org. <a href="#" id="no-map">Hide the map</a> and stop that.</p>
-${LEAFLET}
-<script>
-  window.addEventListener("load", function () {
-    var where = L.map("map", { scrollWheelZoom: false }).setView([${lat}, ${lon}], 5);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 18,
-      attribution: "&copy; OpenStreetMap contributors",
-    }).addTo(where);
-    L.circleMarker([${lat}, ${lon}], { radius: 8, color: "#2563eb", fillOpacity: 0.6 })
-      .addTo(where)
-      .bindPopup(${JSON.stringify(`${lat}, ${lon}`)});
-    document.getElementById("no-map").addEventListener("click", function (event) {
-      event.preventDefault();
-      where.remove();
-      document.getElementById("map").remove();
-    });
-  });
-</script>`;
+<p class="note" id="note">Loading a map fetches tiles, labels and code from ${TILES}. <a href="#" id="no-map">Hide the map</a> and stop that.</p>
+${MAP_LIBRARIES}
+${MAP_SCRIPT(lat, lon, 5)}`;
 };
 
 // map.jasontally.com is nothing but the map, filling the viewport. It is the
@@ -139,9 +161,9 @@ body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<!-- origin, not no-referrer: the OSM tile usage policy requires a valid
-     Referer header on web tile requests, and referer-stripping traffic may
-     be blocked without notice. This sends the origin only, not the path. -->
+<!-- origin, not no-referrer: the tiles are served by this same zone, so no
+     usage policy needs a Referer. "origin" still keeps the path and the query
+     string out of the header that rides along with every tile request. -->
 <meta name="referrer" content="origin">
 <title>${escapeHtml(lat)}, ${escapeHtml(lon)}</title>
 <style>
@@ -153,28 +175,13 @@ body{font:14px/1.4 system-ui,sans-serif}
 .note a{color:#cfe3ff}
 </style>
 <div id="map" role="img" aria-label="Map at ${escapeHtml(lat)}, ${escapeHtml(lon)}"></div>
-<p class="note">Approximate, from your network not a GPS fix. Tiles from
-<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>,
-code from unpkg.com. <a href="#" id="no-map">Stop loading them</a>.</p>
-${LEAFLET}
-<script>
-  window.addEventListener("load", function () {
-    var where = L.map("map").setView([${lat}, ${lon}], 6);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 18,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(where);
-    L.circleMarker([${lat}, ${lon}], { radius: 10, color: "#2563eb", fillOpacity: 0.6 })
-      .addTo(where)
-      .bindPopup(${JSON.stringify(`${lat}, ${lon}`)});
-    document.getElementById("no-map").addEventListener("click", function (event) {
-      event.preventDefault();
-      where.remove();
-      document.getElementById("map").remove();
-      document.querySelector(".note").remove();
-    });
-  });
-</script>
+<p class="note" id="note">Approximate, from your network not a GPS fix.
+<a href="https://github.com/protomaps/basemaps">Protomaps Basemap</a> tiles, derived from
+<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors,
+served from <a href="${TILES}">tiles.jasontally.com</a>.
+<a href="#" id="no-map">Stop loading them</a>.</p>
+${MAP_LIBRARIES}
+${MAP_SCRIPT(lat, lon, 6)}
 </html>`;
 };
 
@@ -184,16 +191,15 @@ const detailsPage = (request, ip) => {
 	const headers = Object.fromEntries(request.headers);
 
 	const asn = cf.asn ? `AS${cf.asn}` : null;
-	const place = [cf.city, cf.region, cf.postalCode, cf.country].filter(Boolean);
 	const located = cf.latitude != null && cf.longitude != null;
 
 	return `<!DOCTYPE html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<!-- origin, not no-referrer: the OSM tile usage policy requires a valid
-     Referer header on web tile requests, and referer-stripping traffic may
-     be blocked without notice. This sends the origin only, not the path. -->
+<!-- origin, not no-referrer: the tiles are served by this same zone, so no
+     usage policy needs a Referer. "origin" still keeps the path and the query
+     string out of the header that rides along with every tile request. -->
 <meta name="referrer" content="origin">
 <title>${escapeHtml(ip)} &mdash; whoami</title>
 <style>
@@ -242,14 +248,9 @@ ${section(
 		["Latitude", cf.latitude],
 		["Longitude", cf.longitude],
 		["Timezone", cf.timezone],
-		[
-			"Map",
-			located
-				? raw(
-						`<a href="https://www.openstreetmap.org/?mlat=${encodeURIComponent(cf.latitude)}&mlon=${encodeURIComponent(cf.longitude)}#map=12/${cf.latitude}/${cf.longitude}">OpenStreetMap</a>`,
-					)
-				: null,
-		],
+		// There was a "Map" row here, linking openstreetmap.org with a ?mlat
+		// permalink. It is gone: the map below holds the same coordinates, and
+		// that link was the last thing on this page that led to a third party.
 	]),
 )}
 ${located ? section("Where that is", map(cf.latitude, cf.longitude)) : ""}

@@ -13,8 +13,8 @@
 //             on the same network as the Snippet that calls it. No published
 //             limit.
 //   page      the HTML pages, served with no subrequest for a plain value.
-//             Node fetch does not run JavaScript, so Leaflet and the OSM tiles
-//             are never requested. This profile does not measure the tile path.
+//             Node fetch does not run JavaScript, so MapLibre and the tiles are
+//             never requested. This profile does not measure the map path.
 //
 // The run ramps concurrency and reports throughput and latency at each step.
 // A knee shows up as throughput flattening while p95 climbs.
