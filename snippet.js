@@ -96,10 +96,14 @@ const MAP_SCRIPT = (lat, lon, zoom) => `<script>
       maplibregl.addProtocol("pmtiles", protocol.tile);
       var where = new maplibregl.Map({
         container: "map", style: style, center: [${lon}, ${lat}], zoom: ${zoom},
-        // The archive holds zoom 0 to 15. Past 15 it would ask for tiles that
-        // are not in the file. scrollWheelZoom stays off, as it was with Leaflet,
-        // so a page that scrolls does not zoom the map.
-        maxZoom: 15, scrollWheelZoom: false,
+        // The archive holds zoom 0 to 15. Past 15 MapLibre overzooms: it
+        // re-renders the deepest tiles it has rather than asking for a z16 part
+        // that does not exist, which is what a vector tile set is for. The
+        // geometry stays crisp and nothing 404s; only the detail stays at
+        // z15. Three levels of it is enough to read a street name.
+        // scrollWheelZoom stays off, as it was with Leaflet, so a page that
+        // scrolls does not zoom the map.
+        maxZoom: 18, scrollWheelZoom: false,
         // The control is added below instead, because the value MapLibre
         // defaults to carries a "MapLibre" link of its own. This way the only
         // credit on the map is the one the style names.
