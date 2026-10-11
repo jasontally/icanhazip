@@ -235,7 +235,7 @@ test("the whoami page embeds a map with pinned libraries and a marker", async ()
 	// object. MapLibre takes longitude first, the other way round from Leaflet.
 	assert.match(body, /center: \[-97\.7431, 30\.2672\], zoom: 5/);
 	assert.match(body, /setLngLat\(\[-97\.7431, 30\.2672\]\)/);
-	assert.match(body, /maxZoom: 15/);
+	assert.match(body, /maxZoom: 18/);
 	// The archive is Protomaps schema v3, so the style must be one of the two
 	// written for it. A style for another schema draws nothing at all.
 	assert.match(body, /attributionControl: false/);
