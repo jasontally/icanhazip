@@ -84,7 +84,7 @@ const MAP_LIBRARIES = `<link rel="stylesheet" href="${TILES}/vendor/maplibre-gl.
 // holds the glyph URL, so tiles, labels and code all come from
 // tiles.jasontally.com. It is a Protomaps schema v3 style, which is the schema
 // this archive holds.
-const MAP_SCRIPT = (lat, lon, zoom) => `<script>
+const MAP_SCRIPT = (lat, lon, zoom, interactive = true) => `<script>
   window.addEventListener("load", function () {
     // The page CSS already follows the visitor's colour scheme, so the map
     // does too. Both styles are the same map with different paint.
@@ -95,7 +95,7 @@ const MAP_SCRIPT = (lat, lon, zoom) => `<script>
       var protocol = new pmtiles.Protocol();
       maplibregl.addProtocol("pmtiles", protocol.tile);
       var where = new maplibregl.Map({
-        container: "map", style: style, center: [${lon}, ${lat}], zoom: ${zoom},
+        container: "map", style: style, center: [${lon}, ${lat}], zoom: ${zoom},${interactive ? "" : " interactive: false,"}
         // The archive holds zoom 0 to 15. Past 15 MapLibre overzooms: it
         // re-renders the deepest tiles it has rather than asking for a z16 part
         // that does not exist, which is what a vector tile set is for. The
@@ -137,7 +137,7 @@ const map = (latitude, longitude) => {
 	const lon = String(Number(longitude));
 	return `<div id="map" role="img" aria-label="Map at ${escapeHtml(latitude)}, ${escapeHtml(longitude)}"></div>
 ${MAP_LIBRARIES}
-${MAP_SCRIPT(lat, lon, 5)}`;
+${MAP_SCRIPT(lat, lon, 5, false)}`;
 };
 
 // map.jasontally.com is nothing but the map, filling the viewport. It is the
