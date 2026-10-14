@@ -124,15 +124,31 @@ const MAP_SCRIPT = (lat, lon, zoom, interactive = true) => `<script>
         .addTo(where);
 
       // The OpenStreetMap credit is shown open first, for the guideline that
-      // asks for it to be presented with no interaction. It folds away after
-      // five seconds here, which is one of the collapses that guideline allows.
-      setTimeout(function () {
+      // asks for it to be presented with no interaction. On /whoami the credit
+      // can sit below the fold, so wait until it actually appears on screen
+      // before starting the five-second clock. That is one of the collapses
+      // the guideline allows.
+      (function () {
         var attribution = document.querySelector(".maplibregl-ctrl-attrib");
-        if (attribution) {
+        if (!attribution) return;
+        var collapse = function () {
           attribution.classList.remove("maplibregl-compact-show");
           attribution.removeAttribute("open");
+        };
+        if ("IntersectionObserver" in window) {
+          var observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+              if (entry.isIntersecting) {
+                observer.disconnect();
+                setTimeout(collapse, 5000);
+              }
+            });
+          }, { threshold: 0.1 });
+          observer.observe(attribution);
+        } else {
+          setTimeout(collapse, 5000);
         }
-      }, 5000);
+      })();
     } catch (error) {
       // WebGL is the one thing MapLibre cannot work without, and a few old
       // browsers and some locked-down setups do not have it.
