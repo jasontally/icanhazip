@@ -122,6 +122,17 @@ const MAP_SCRIPT = (lat, lon, zoom, interactive = true) => `<script>
         .setLngLat([${lon}, ${lat}])
         .setPopup(new maplibregl.Popup().setText(${JSON.stringify(`${lat}, ${lon}`)}))
         .addTo(where);
+
+      // The OpenStreetMap credit is shown open first, for the guideline that
+      // asks for it to be presented with no interaction. It folds away after
+      // five seconds here, which is one of the collapses that guideline allows.
+      setTimeout(function () {
+        var attribution = document.querySelector(".maplibregl-ctrl-attrib");
+        if (attribution) {
+          attribution.classList.remove("maplibregl-compact-show");
+          attribution.removeAttribute("open");
+        }
+      }, 5000);
     } catch (error) {
       // WebGL is the one thing MapLibre cannot work without, and a few old
       // browsers and some locked-down setups do not have it.
