@@ -77,8 +77,8 @@ const noContent = () => new Response(null, { status: 204, headers: { "cache-cont
 // SRI pins the exact bytes: a tampered copy fails to load rather than runs.
 const TILES = "https://tiles.jasontally.com";
 const MAP_LIBRARIES = `<link rel="stylesheet" href="${TILES}/vendor/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="">
-<script src="${TILES}/vendor/maplibre-gl.js" integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin=""></script>
-<script src="${TILES}/vendor/pmtiles.js" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0+JGZ5H+3mfzVIp6zsQNkTsfGJot93" crossorigin=""></script>`;
+<script defer src="${TILES}/vendor/maplibre-gl.js" integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin=""></script>
+<script defer src="${TILES}/vendor/pmtiles.js" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0+JGZ5H+3mfzVIp6zsQNkTsfGJot93" crossorigin=""></script>`;
 
 // One map, built the same way on both pages that carry one. The style JSON
 // holds the glyph URL, so tiles, labels and code all come from
@@ -228,6 +228,7 @@ const detailsPage = (request, ip) => {
      usage policy needs a Referer. "origin" still keeps the path and the query
      string out of the header that rides along with every tile request. -->
 <meta name="referrer" content="origin">
+<meta name="description" content="Your request details: IP address, location, network, TLS and browser fields, shown by ip.jasontally.com.">
 <title>${escapeHtml(ip)} &mdash; whoami</title>
 <style>
 :root{color-scheme:light dark}
@@ -242,8 +243,10 @@ code,td{overflow-wrap:anywhere}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font-size:.85rem;background:color-mix(in srgb,currentColor 5%,transparent);padding:.75rem;border-radius:.25rem}
 .none{opacity:.4}
 #map{height:20rem;border-radius:.25rem;margin:0;background:color-mix(in srgb,currentColor 8%,transparent);border:1px solid color-mix(in srgb,currentColor 15%,transparent)}
-footer{margin-top:2.5rem;font-size:.85rem;opacity:.6}
+footer{margin-top:2.5rem;font-size:.85rem;opacity:.75}
+footer a{opacity:1}
 </style>
+<main>
 <h1>${escapeHtml(ip)}</h1>
 <p>You are looking at your own request. Nothing here is stored or sent anywhere.</p>
 ${section(
@@ -321,6 +324,7 @@ ${section(
 	say whether the visitor is on Cloudflare WARP, Gateway or RBI, plus
 	<code>kex</code>, <code>sliver</code> and <code>ts</code>.</p>`,
 )}
+</main>
 <footer>Served by a Cloudflare Snippet. <a href="${SOURCE}">${SOURCE}</a></footer>
 </html>
 `;
