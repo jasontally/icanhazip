@@ -22,6 +22,10 @@ data centre, `ptr` the reverse DNS name, `temp` the temperature.
 | `https://ip.jasontally.com/whoami` | the same HTML page |
 | `https://city.jasontally.com/` | one data point about the visitor |
 | `https://colo.jasontally.com/whoami` | the HTML page, from any host |
+| `https://<any host>/robots.txt` | a crawl rule for crawlers |
+| `https://<any host>/llms.txt` | a Markdown summary with links, for LLMs |
+| `https://<any host>/agents.md` | an agent skill: every endpoint and its shape |
+| `https://<any host>/.well-known/ard.json` | the ARD manifest, for AI agents |
 | a hostname with no DNS record | not run |
 
 The plain response is `text/plain`, holds the address from `CF-Connecting-IP`,

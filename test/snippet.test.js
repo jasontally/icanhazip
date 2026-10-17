@@ -320,12 +320,12 @@ test("both map pages advertise the catalog with a link tag and a Link header", a
 		const body = await response.text();
 		assert.match(
 			body,
-			/<link rel="ai-catalog" href="\/\.well-known\/ai-catalog\.json">/,
+			/<link rel="ard" href="\/\.well-known\/ard\.json">/,
 			target
 		);
 		assert.match(
 			response.headers.get("link"),
-			/<https:\/\/[^/]+\/\.well-known\/ai-catalog\.json>; rel="ai-catalog"/,
+			/<https:\/\/[^/]+\/\.well-known\/ard\.json>; rel="ard"/,
 			target
 		);
 	}
@@ -364,7 +364,16 @@ test("the ARD catalog answers JSON that follows the published schema", async () 
 				`${target}${pathname}`
 			);
 			assert.ok(entry.displayName, pathname);
-			assert.match(entry.url, /^https:/, pathname);
+			// Every advertised type must pass the conformance test's media type
+			// check: standard, or an application extension. Anything else warns
+			// and costs the audit its last points. The artifact is the agent
+			// skill, so its type is the skill type.
+			assert.equal(
+				entry.type,
+				'text/markdown; profile="urn:air:agent-skills"',
+				`${target}${pathname}`
+			);
+			assert.match(entry.url, /^https:\/\/[^/]+\/agents\.md$/, pathname);
 			assert.ok(!("data" in entry), pathname);
 		}
 	}
@@ -374,8 +383,27 @@ test("the catalog names what the audited host does, not a generic echo", async (
 	const response = await call("https://ip.jasontally.com/.well-known/ai-catalog.json");
 	const catalog = JSON.parse(await response.text());
 	assert.match(catalog.entries[0].identifier, /whoami/, "the whoami host");
-	assert.match(catalog.entries[0].url, /^https:\/\/ip\.jasontally\.com\/whoami$/, "page url");
 	assert.ok(catalog.entries[0].representativeQueries.length >= 2, "two sample questions");
+});
+
+test("the agent skill answers as Markdown from every host, whole", async () => {
+	// The map host and a value host, beside the audited one, because the most
+	// likely regression here is the host's usual body answering again.
+	for (const target of ["https://ip.jasontally.com", "https://map.jasontally.com", "https://city.jasontally.com"]) {
+		const response = await call(`${target}/agents.md`);
+		assert.equal(
+			response.headers.get("content-type"),
+			"text/markdown; charset=utf-8",
+			target
+		);
+		const body = await response.text();
+		assert.match(body, /^---\nname: [a-z-]+\ndescription: ./s, target);
+		assert.match(body, /\| ip \| the visitor address/, target);
+		assert.match(body, /https:\/\/ip\.jasontally\.com\/whoami/, target);
+		// The file rides in one template literal, so an unexpanded placeholder
+		// would ship as dollar-brace.
+		assert.ok(!body.includes("${"), target);
+	}
 });
 
 test("no coordinates means no map and no libraries", async () => {

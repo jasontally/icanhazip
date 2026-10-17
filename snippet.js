@@ -11,9 +11,12 @@
 //   https://ptr.jasontally.com/           ->  the visitor reverse DNS name
 //   https://<any host>/robots.txt         ->  a crawl rule
 //   https://<any host>/llms.txt           ->  a Markdown summary with links
-//   https://<any host>/.well-known/ai-catalog.json
-//                                         ->  the ARD catalog these hosts
+//   https://<any host>/agents.md         ->  an agent skill: every endpoint,
+//                                             what it returns, how to read it
+//   https://<any host>/.well-known/ard.json
+//                                         ->  the ARD manifest these hosts
 //                                             expose for AI agents
+//                                             (/ai-catalog.json: same bytes)
 //   any other hostname                    ->  not run (snippet rule)
 //
 // Every subdomain is in the one Snippet rule. A rule expression can hold 4096
@@ -86,12 +89,14 @@ const noContent = () => new Response(null, { status: 204, headers: { "cache-cont
 //                   Lighthouse's robots.txt audit, so the catalog advertises
 //                   itself in the pages and the Link header instead.
 //   llms.txt        a Markdown summary: an H1 first, then links.
+//   agents.md       the one artifact an agent can read as data: an agent skill
+//                   that lists every endpoint, its return shape, and the
+//                   reading rules. Its type in the catalog is the skill type.
 //   /.well-known/
-//     ai-catalog.json  the catalog from the Agentic Resource Discovery spec
-//                      (https://github.com/ards-project/ard-spec): one entry
-//                      naming what this host does. /ard.json answers the same
-//                      bytes, because the spec renamed the file and readers
-//                      ask for either name.
+//     ard.json      the manifest from the Agentic Resource Discovery spec
+//                   (https://agenticresourcediscovery.org): one entry pointing
+//                   at agents.md. /ai-catalog.json answers the same bytes,
+//                   because readers built on the first name still ask for it.
 const AGENT_ENTRY = {
 	ip: {
 		namespace: "whoami",
@@ -119,9 +124,13 @@ const AGENT_ENTRY = {
 	},
 };
 
-// One ARD entry per host, from the schema's required shape: specVersion, one
-// entry whose identifier is a URN anchored to this domain, and a url, because
-// nothing here embeds an artifact inline.
+// One ARD entry per host. The entry names the one artifact here that an agent
+// can read as data, /agents.md, so it types the artifact as what it is: a skill
+// in Markdown. A type that names an HTML page warns in the conformance test,
+// because the standard types are the ones an agent can consume. The URN stays
+// anchored to this domain.
+const SKILL_TYPE = `text/markdown; profile="urn:air:agent-skills"`;
+
 const aiCatalog = (host) => {
 	const label = host.split(".")[0] || "home";
 	const mine = AGENT_ENTRY[label];
@@ -135,13 +144,12 @@ const aiCatalog = (host) => {
 		},
 		entries: [
 			{
-				identifier: `urn:air:jasontally.com:${namespace}:${
-					mine ? `${namespace}-page` : "value"
-				}`,
-				displayName: mine?.displayName ?? `Visitor ${label}`,
-				type: mine ? "text/html" : "text/plain",
-				url: `https://${host}${mine?.path ?? "/"}`,
-				description: mine?.description ?? `The visitor's ${label}, one line of plain text.`,
+				identifier: `urn:air:jasontally.com:${namespace}:skill`,
+				displayName: `How to query ${host}`,
+				type: SKILL_TYPE,
+				url: `https://${host}/agents.md`,
+				description:
+					"Every endpoint this host family answers, what each returns, and the reading rules: one line per request, no caching, an empty line means no value.",
 				representativeQueries: mine?.queries ?? [
 					`What is my ${label}?`,
 					`Show the ${label} of the address this request comes from.`,
@@ -153,13 +161,13 @@ const aiCatalog = (host) => {
 
 // The address of the catalog, for the three signals that name it.
 const aiCatalogLink = (host) =>
-	`<https://${host}/.well-known/ai-catalog.json>; rel="ai-catalog"`;
+	`<https://${host}/.well-known/ard.json>; rel="ard"`;
 
-// The Link header is one of the three ways the catalog is named, beside the
-// <link rel="ai-catalog"> in each page. The third, an Agentmap line in
-// robots.txt, stays out: robots parsers here would call the directive unknown
-// and the robots.txt audit would fail with it, so the catalog advertises
-// itself in the pages and answers at the documented path.
+// The Link header and the <link rel="ard"> tag in each page are the two
+// documentation-era signals. A third, an Agentmap line in robots.txt, stays
+// out: robots parsers here would call the directive unknown and the robots.txt
+// audit would fail with it, so the catalog advertises itself in the pages and
+// answers at both documented paths.
 const extraPageHeaders = (url) => ({ link: aiCatalogLink(url.hostname) });
 
 // The summary an LLM reads first. llmstxt.org asks for an H1 and for links in
@@ -171,8 +179,91 @@ const llmsTxt = (host) => {
 	const lead = mine
 		? `> ${mine.description}\n\n## Pages\n\n- [${mine.page}](https://${host}${mine.path}): what this host serves\n`
 		: `> An icanhazip endpoint: one plain-text line about this request.\n\n## Pages\n\n- [Home](https://${host}/): the visitor's ${label}\n`;
-	return `# ${host}\n${lead}- [Request details](https://ip.jasontally.com/whoami): every field the edge saw\n- [Plain IP](https://ip.jasontally.com/): the address this request comes from\n`;
+	return `# ${host}\n${lead}- [Agent skill](https://${host}/agents.md): every endpoint, what it returns, and the reading rules\n- [Request details](https://ip.jasontally.com/whoami): every field the edge saw\n- [Plain IP](https://ip.jasontally.com/): the address this request comes from\n`;
 };
+
+// Same body rules as plain(), but served as Markdown, because the type in the
+// ARD catalog is what the conformance test compares against, and it names
+// Markdown.
+const markdown = (body) =>
+	new Response(body, {
+		headers: {
+			"content-type": "text/markdown; charset=utf-8",
+			"cache-control": "no-store",
+			"access-control-allow-origin": "*",
+		},
+	});
+
+// The agent skill itself. Frontmatter follows the agent-skills shape: a name
+// and a when-to-use description. The body is the endpoint table of the README,
+// cut to what a machine needs to pick an endpoint. No backticks, so the whole
+// file rides in one template literal. Served on every host, so the manifest of
+// each host can point at its own origin.
+const SKILL_MD = `---
+name: jasontally-request-facts
+description: Answers one fact about the HTTP request itself at jasontally.com. Use when a task needs the caller's own IP address, where the request comes from, or the network, TLS, DNS, weather or proxy facts of that request. Each subdomain answers one plain-text value, a few hosts answer JSON, and /whoami shows everything at once.
+license: MIT
+---
+
+# jasontally.com: request facts, one line each
+
+Every endpoint below answers one fact about the request that fetched it, as
+text/plain with a trailing newline. The facts are always about the request
+itself: no endpoint takes a target address, a path, or a query.
+
+Reading rules:
+
+- An empty line means the field holds no value here. A 204 means the host
+  looked and found nothing.
+- Nothing is cached at the edge (Cache-Control: no-store), so a repeat
+  question re-measures.
+- A few endpoints cost subrequests: ptr, ns, dns and the whois family. The
+  zone allows two subrequests per request.
+
+## Plain text: one host, one value
+
+| Host | Answers |
+|---|---|
+| ip | the visitor address, IPv4 or IPv6, verbatim |
+| city, region/state/province, country/cc/co, postal/zip | the Cloudflare geo fields |
+| continent, timezone/tz, lat/latitude, lon/longitude, metro/dma | more geo fields |
+| geo/latlong/latlon/latlng | "lat,long", one string, in the order maps want |
+| asn, as/org/isp | the network operator and its organisation |
+| colo/edge | the Cloudflare data centre code |
+| http/proto, tls, cipher | protocol, TLS version, cipher name |
+| rtt | the TCP round trip, in microseconds |
+| bot | Cloudflare's bot score |
+| eu | whether the request ends in the EU |
+| ray | the cf-ray request id |
+| ua/useragent, lang | the request's User-Agent and Accept-Language |
+| xff | the X-Forwarded-For chain, left to right |
+| ver, ip4, ip6 | the address family, and the address of that one family |
+| utc/now, date/day/today, time/clock, epoch/timestamp | the edge clock, sliced |
+| year, month, hour, minute, second | the same clock, one field each |
+| ptr/hostname, ns/nameserver | reverse DNS of the visitor address |
+| dns | forward-confirmed reverse DNS: the name only when it loops back |
+| net/netname, netblock/range, cidr | the whois block the address sits in |
+| prefix/bgp | the block the network announces in BGP |
+| temp/tempc, tempf/fahrenheit, feels | temperature at the request coordinates |
+| humidity, wind, clouds, precip, elevation, sunrise, sunset, wmo/weather | the rest of the weather at those coordinates |
+
+## JSON hosts
+
+| Host | Answers |
+|---|---|
+| headers.jasontally.com | every request header, JSON |
+| proxy.jasontally.com and proxies | the proxy header chain; a 204 when no proxy declared itself |
+
+## The whole request at once
+
+https://ip.jasontally.com/whoami is an HTML page with every field above, all
+request headers, and the whole request.cf object. Cloudflare answers
+/cdn-cgi/trace itself, before this service runs, and reports a few things
+here cannot: warp, gateway and rbi.
+
+Most names above have one or more aliases. The full list is the source at
+https://github.com/jasontally/icanhazip.
+`;
 
 const agentAnswer = (pathname, host) => {
 	switch (pathname) {
@@ -180,6 +271,8 @@ const agentAnswer = (pathname, host) => {
 			return plain("User-agent: *\nAllow: /");
 		case "/llms.txt":
 			return plain(llmsTxt(host));
+		case "/agents.md":
+			return markdown(SKILL_MD);
 		case "/.well-known/ai-catalog.json":
 		case "/.well-known/ard.json":
 			return json(JSON.stringify(aiCatalog(host), null, "\t"));
@@ -312,7 +405,7 @@ const mapPage = (request) => {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>No location</title>
 <meta name="description" content="A world map at the coordinates of this request.">
-<link rel="ai-catalog" href="/.well-known/ai-catalog.json">
+<link rel="ard" href="/.well-known/ard.json">
 <style>
 :root{color-scheme:light dark}
 body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:1rem}
@@ -337,7 +430,7 @@ body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-
 <meta name="referrer" content="origin">
 <title>${escapeHtml(lat)}, ${escapeHtml(lon)}</title>
 <meta name="description" content="A world map at the coordinates of this request.">
-<link rel="ai-catalog" href="/.well-known/ai-catalog.json">
+<link rel="ard" href="/.well-known/ard.json">
 <style>
 :root{color-scheme:light dark}
 html,body{height:100%;margin:0}
@@ -367,7 +460,7 @@ const detailsPage = (request, ip) => {
      string out of the header that rides along with every tile request. -->
 <meta name="referrer" content="origin">
 <meta name="description" content="Your request details: IP address, location, network, TLS and browser fields, shown by ip.jasontally.com.">
-<link rel="ai-catalog" href="/.well-known/ai-catalog.json">
+<link rel="ard" href="/.well-known/ard.json">
 <title>${escapeHtml(ip)} &mdash; whoami</title>
 <style>
 :root{color-scheme:light dark}
