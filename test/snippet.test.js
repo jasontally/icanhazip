@@ -272,6 +272,27 @@ test("the map pages credit OpenStreetMap only through the attribution control", 
 	}
 });
 
+test("both map pages draw a phone at a pixel ratio of one", async () => {
+	// The map is a picture, not text, so 1.5 is where more pixels stop buying
+	// anything a visitor can see, and a phone goes one step further to 1. The
+	// ratio also picks the sprite variant, so this is bytes as well as raster
+	// work.
+	for (const target of ["https://ip.jasontally.com/whoami", "https://map.jasontally.com/"]) {
+		const body = await (await call(target)).text();
+		assert.match(body, /pixelRatio: ratio/, target);
+		assert.match(body, /var shortest = Math\.min\(window\.innerWidth, window\.innerHeight\)/, target);
+		assert.match(
+			body,
+			/var ratio = shortest < 700 \? 1 : Math\.min\(window\.devicePixelRatio \|\| 1, 1\.5\)/,
+			target
+		);
+		// The constructor option, so the ratio is in force before the first frame
+		// rather than after a resize. The comment in the script names
+		// setPixelRatio, so the pattern asks for a call.
+		assert.doesNotMatch(body, /\.setPixelRatio\(/, target);
+	}
+});
+
 test("no coordinates means no map and no libraries", async () => {
 	const body = await (
 		await call("https://ip.jasontally.com/whoami", { cf: { ...CF, latitude: undefined, longitude: undefined } })

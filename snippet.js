@@ -94,8 +94,24 @@ const MAP_SCRIPT = (lat, lon, zoom, interactive = true) => `<script>
     try {
       var protocol = new pmtiles.Protocol();
       maplibregl.addProtocol("pmtiles", protocol.tile);
+      // A phone draws at a device ratio of two or more, which is four times the
+      // pixels of a desktop of the same size, and the map's first frame is the
+      // most expensive work in this page's load. The map is a picture, not text,
+      // so 1.5 is the point past which more pixels stop buying anything a
+      // visitor can see. A phone takes one step further and draws at 1: its
+      // narrow side is under 700 pixels either way up, and what that costs is
+      // softness in the labels, which are read at arm's length. This is the rule
+      // the tiles page uses. It also picks the 1x sprite, because MapLibre takes
+      // the variant from this ratio: at 1 the request is light.png, and above 1
+      // it is the @2x name, which costs a 307 redirect as well as the larger
+      // sheet.
+      var shortest = Math.min(window.innerWidth, window.innerHeight);
+      var ratio = shortest < 700 ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
       var where = new maplibregl.Map({
         container: "map", style: style, center: [${lon}, ${lat}], zoom: ${zoom},${interactive ? "" : " interactive: false,"}
+        // The constructor option, not setPixelRatio, which resizes and draws the
+        // first frame twice. Put here it is in force before the first frame.
+        pixelRatio: ratio,
         // The archive holds zoom 0 to 15. Past 15 MapLibre overzooms: it
         // re-renders the deepest tiles it has rather than asking for a z16 part
         // that does not exist, which is what a vector tile set is for. The
