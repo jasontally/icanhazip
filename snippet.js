@@ -102,9 +102,9 @@ const MAP_SCRIPT = (lat, lon, zoom, interactive = true) => `<script>
       // narrow side is under 700 pixels either way up, and what that costs is
       // softness in the labels, which are read at arm's length. This is the rule
       // the tiles page uses. It also picks the 1x sprite, because MapLibre takes
-      // the variant from this ratio: at 1 the request is light.png, and above 1
-      // it is the @2x name, which costs a 307 redirect as well as the larger
-      // sheet.
+      // the variant from this ratio: at 1 the request is light.png, which
+      // measures 16,174 bytes, and above 1 it is the @2x name, which measures
+      // 28,852.
       var shortest = Math.min(window.innerWidth, window.innerHeight);
       var ratio = shortest < 700 ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
       var where = new maplibregl.Map({
