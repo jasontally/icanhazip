@@ -9,6 +9,11 @@
 //   https://city.jasontally.com/          ->  the visitor city
 //   https://colo.jasontally.com/          ->  the Cloudflare data centre
 //   https://ptr.jasontally.com/           ->  the visitor reverse DNS name
+//   https://<any host>/robots.txt         ->  a crawl rule
+//   https://<any host>/llms.txt           ->  a Markdown summary with links
+//   https://<any host>/.well-known/ai-catalog.json
+//                                         ->  the ARD catalog these hosts
+//                                             expose for AI agents
 //   any other hostname                    ->  not run (snippet rule)
 //
 // Every subdomain is in the one Snippet rule. A rule expression can hold 4096
@@ -69,6 +74,119 @@ const json = (body) =>
 // icanhazproxy answered 204 when it found nothing, which lets a script tell
 // "no proxy" apart from "empty". Returning a line would lose that.
 const noContent = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+
+// Crawlers and agents ask for files by name, and both the SEO audits that read
+// them and the Agentic Browsing category run against one host, not the zone.
+// A value host would answer every one of these paths with the value itself,
+// and the map host with the map, so robots.txt would hold an IP address and
+// the catalog would be HTML. The three files:
+//
+//   robots.txt      a crawl rule. Kept to the directives every parser knows:
+//                   an unknown line, such as the ARD Agentmap pointer, fails
+//                   Lighthouse's robots.txt audit, so the catalog advertises
+//                   itself in the pages and the Link header instead.
+//   llms.txt        a Markdown summary: an H1 first, then links.
+//   /.well-known/
+//     ai-catalog.json  the catalog from the Agentic Resource Discovery spec
+//                      (https://github.com/ards-project/ard-spec): one entry
+//                      naming what this host does. /ard.json answers the same
+//                      bytes, because the spec renamed the file and readers
+//                      ask for either name.
+const AGENT_ENTRY = {
+	ip: {
+		namespace: "whoami",
+		page: "Request details",
+		displayName: "Your request details",
+		description:
+			"Every field this request carries at the edge: IP address, Cloudflare location and network data, TLS and browser hints.",
+		path: "/whoami",
+		queries: [
+			"What is my IP address and its location?",
+			"Which data centre serves my request?",
+		],
+	},
+	map: {
+		namespace: "ipmap",
+		page: "Map",
+		displayName: "World map at this request's coordinates",
+		description:
+			"An interactive map drawn at the coordinates Cloudflare reports for the visitor's address.",
+		path: "/",
+		queries: [
+			"Show me a map of my current location",
+			"Map centred on where this request comes from",
+		],
+	},
+};
+
+// One ARD entry per host, from the schema's required shape: specVersion, one
+// entry whose identifier is a URN anchored to this domain, and a url, because
+// nothing here embeds an artifact inline.
+const aiCatalog = (host) => {
+	const label = host.split(".")[0] || "home";
+	const mine = AGENT_ENTRY[label];
+	const namespace = mine ? mine.namespace : label;
+	return {
+		specVersion: "1.0",
+		host: {
+			displayName: host,
+			identifier: `did:web:${host}`,
+			documentationUrl: SOURCE,
+		},
+		entries: [
+			{
+				identifier: `urn:air:jasontally.com:${namespace}:${
+					mine ? `${namespace}-page` : "value"
+				}`,
+				displayName: mine?.displayName ?? `Visitor ${label}`,
+				type: mine ? "text/html" : "text/plain",
+				url: `https://${host}${mine?.path ?? "/"}`,
+				description: mine?.description ?? `The visitor's ${label}, one line of plain text.`,
+				representativeQueries: mine?.queries ?? [
+					`What is my ${label}?`,
+					`Show the ${label} of the address this request comes from.`,
+				],
+			},
+		],
+	};
+};
+
+// The address of the catalog, for the three signals that name it.
+const aiCatalogLink = (host) =>
+	`<https://${host}/.well-known/ai-catalog.json>; rel="ai-catalog"`;
+
+// The Link header is one of the three ways the catalog is named, beside the
+// <link rel="ai-catalog"> in each page. The third, an Agentmap line in
+// robots.txt, stays out: robots parsers here would call the directive unknown
+// and the robots.txt audit would fail with it, so the catalog advertises
+// itself in the pages and answers at the documented path.
+const extraPageHeaders = (url) => ({ link: aiCatalogLink(url.hostname) });
+
+// The summary an LLM reads first. llmstxt.org asks for an H1 and for links in
+// Markdown, and Lighthouse flags a file that has neither or is too short, so
+// the first line is the title and the lists are real links.
+const llmsTxt = (host) => {
+	const label = host.split(".")[0] || "home";
+	const mine = AGENT_ENTRY[label];
+	const lead = mine
+		? `> ${mine.description}\n\n## Pages\n\n- [${mine.page}](https://${host}${mine.path}): what this host serves\n`
+		: `> An icanhazip endpoint: one plain-text line about this request.\n\n## Pages\n\n- [Home](https://${host}/): the visitor's ${label}\n`;
+	return `# ${host}\n${lead}- [Request details](https://ip.jasontally.com/whoami): every field the edge saw\n- [Plain IP](https://ip.jasontally.com/): the address this request comes from\n`;
+};
+
+const agentAnswer = (pathname, host) => {
+	switch (pathname) {
+		case "/robots.txt":
+			return plain("User-agent: *\nAllow: /");
+		case "/llms.txt":
+			return plain(llmsTxt(host));
+		case "/.well-known/ai-catalog.json":
+		case "/.well-known/ard.json":
+			return json(JSON.stringify(aiCatalog(host), null, "\t"));
+		default:
+			return null;
+	}
+};
 
 // A map here is three files, and all three are far over the 32 KB Snippet
 // limit, so all three load over the network. They come from
@@ -193,6 +311,8 @@ const mapPage = (request) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>No location</title>
+<meta name="description" content="A world map at the coordinates of this request.">
+<link rel="ai-catalog" href="/.well-known/ai-catalog.json">
 <style>
 :root{color-scheme:light dark}
 body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:1rem}
@@ -216,6 +336,8 @@ body{margin:0;display:grid;place-items:center;height:100vh;font:16px/1.5 system-
      string out of the header that rides along with every tile request. -->
 <meta name="referrer" content="origin">
 <title>${escapeHtml(lat)}, ${escapeHtml(lon)}</title>
+<meta name="description" content="A world map at the coordinates of this request.">
+<link rel="ai-catalog" href="/.well-known/ai-catalog.json">
 <style>
 :root{color-scheme:light dark}
 html,body{height:100%;margin:0}
@@ -245,6 +367,7 @@ const detailsPage = (request, ip) => {
      string out of the header that rides along with every tile request. -->
 <meta name="referrer" content="origin">
 <meta name="description" content="Your request details: IP address, location, network, TLS and browser fields, shown by ip.jasontally.com.">
+<link rel="ai-catalog" href="/.well-known/ai-catalog.json">
 <title>${escapeHtml(ip)} &mdash; whoami</title>
 <style>
 :root{color-scheme:light dark}
@@ -770,11 +893,12 @@ export const hostLabels = [
 	...Object.keys(JSON_HOSTS),
 ];
 
-const page = (body) =>
+const page = (body, extra = {}) =>
 	new Response(body, {
 		headers: {
 			"content-type": "text/html; charset=utf-8",
 			"cache-control": "no-store",
+			...extra,
 		},
 	});
 
@@ -789,7 +913,14 @@ const wantsPage =
 			url.pathname === "/whoami" || url.searchParams.get("whoami") === "";
 
 		// /whoami always gives the details page, on every host.
-		if (wantsPage) return page(detailsPage(request, ip));
+		if (wantsPage) {
+			return page(detailsPage(request, ip), extraPageHeaders(url));
+		}
+
+		// These paths answer a crawler or an agent, with a body the host's usual
+		// value would leave half wrong. See agentAnswer above.
+		const agent = agentAnswer(url.pathname, url.hostname);
+		if (agent) return agent;
 
 		// These hosts answer with JSON, or with 204 when they find nothing.
 		if (inZone && label in JSON_HOSTS) {
@@ -798,7 +929,9 @@ const wantsPage =
 		}
 
 		// These hosts answer with a page, not a value.
-		if (inZone && label in PAGES) return page(PAGES[label](request));
+		if (inZone && label in PAGES) {
+			return page(PAGES[label](request), extraPageHeaders(url));
+		}
 
 		// A subdomain answers with one value, so shell scripts can read it.
 		// The zone check keeps an unrelated host such as city.example.com out.

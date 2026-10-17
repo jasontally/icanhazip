@@ -293,6 +293,91 @@ test("both map pages draw a phone at a pixel ratio of one", async () => {
 	}
 });
 
+test("the crawler and agent files answer as files, not as the host's value", async () => {
+	// A value host, an audited host, and the map host, because the most likely
+	// regression here is the value or the map answering an agent's path again.
+	for (const target of [
+		"https://city.jasontally.com",
+		"https://ip.jasontally.com",
+		"https://map.jasontally.com",
+	]) {
+		const robots = await call(`${target}/robots.txt`);
+		assert.equal(robots.headers.get("content-type"), "text/plain", target);
+		assert.equal(await robots.text(), "User-agent: *\nAllow: /\n", target);
+
+		const summary = await call(`${target}/llms.txt`);
+		assert.equal(summary.headers.get("content-type"), "text/plain", target);
+		const body = await summary.text();
+		assert.ok(body.startsWith(`# ${new URL(target).hostname}\n`), target);
+		assert.ok(body.length >= 50, target);
+		assert.match(body, /\[[^[\]]+\]\(https?:\/\/[^()\s]+\)/, target);
+	}
+});
+
+test("both map pages advertise the catalog with a link tag and a Link header", async () => {
+	for (const target of ["https://ip.jasontally.com/whoami", "https://map.jasontally.com/"]) {
+		const response = await call(target);
+		const body = await response.text();
+		assert.match(
+			body,
+			/<link rel="ai-catalog" href="\/\.well-known\/ai-catalog\.json">/,
+			target
+		);
+		assert.match(
+			response.headers.get("link"),
+			/<https:\/\/[^/]+\/\.well-known\/ai-catalog\.json>; rel="ai-catalog"/,
+			target
+		);
+	}
+});
+
+test("the map page carries a meta description on every branch", async () => {
+	const described =
+		/<meta name="description" content="A world map at the coordinates of this request\.">/;
+	assert.match(await (await call("https://map.jasontally.com/")).text(), described, "map page");
+	// Cloudflare sent no coordinates: the page explains that, and the tag says
+	// the same thing, so a crawler without coordinates sees a description too.
+	const response = await call("https://map.jasontally.com/", {
+		cf: { ...CF, latitude: undefined, longitude: undefined },
+	});
+	assert.match(await response.text(), described, "no-coordinates page");
+});
+
+test("the ARD catalog answers JSON that follows the published schema", async () => {
+	// The spec renamed the file to ard.json; Lighthouse 13.5 still asks for
+	// ai-catalog.json, so the same bytes answer at both names.
+	for (const pathname of ["/.well-known/ai-catalog.json", "/.well-known/ard.json"]) {
+		for (const target of ["https://map.jasontally.com", "https://ip.jasontally.com"]) {
+			const response = await call(`${target}${pathname}`);
+			assert.match(
+				response.headers.get("content-type"),
+				/application\/json/,
+				`${target}${pathname}`
+			);
+			const catalog = JSON.parse(await response.text());
+			assert.equal(catalog.specVersion, "1.0", pathname);
+			assert.ok(Array.isArray(catalog.entries) && catalog.entries.length === 1, pathname);
+			const entry = catalog.entries[0];
+			assert.match(
+				entry.identifier,
+				/^urn:air:[a-zA-Z0-9.-]+(:[a-zA-Z0-9._-]+)+$/,
+				`${target}${pathname}`
+			);
+			assert.ok(entry.displayName, pathname);
+			assert.match(entry.url, /^https:/, pathname);
+			assert.ok(!("data" in entry), pathname);
+		}
+	}
+});
+
+test("the catalog names what the audited host does, not a generic echo", async () => {
+	const response = await call("https://ip.jasontally.com/.well-known/ai-catalog.json");
+	const catalog = JSON.parse(await response.text());
+	assert.match(catalog.entries[0].identifier, /whoami/, "the whoami host");
+	assert.match(catalog.entries[0].url, /^https:\/\/ip\.jasontally\.com\/whoami$/, "page url");
+	assert.ok(catalog.entries[0].representativeQueries.length >= 2, "two sample questions");
+});
+
 test("no coordinates means no map and no libraries", async () => {
 	const body = await (
 		await call("https://ip.jasontally.com/whoami", { cf: { ...CF, latitude: undefined, longitude: undefined } })
