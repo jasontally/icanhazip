@@ -38,7 +38,10 @@ HOST=ip.$ZONE
 SNIPPET_NAME=icanhazip
 # RFC 6666 IPv6 discard prefix. Snippets answer before the origin, so this is
 # never contacted. It exists only so the request reaches the Cloudflare edge.
-ORIGIN=100::1
+ORIGIN="100::42"
+# The previous origin. Kept only to migrate records created before this
+# project stopped sharing the generic discard address with other projects.
+OLD_ORIGIN="100::1"
 # A Snippet rule expression may hold 4096 characters. This is the ceiling the
 # API enforces, measured against this zone.
 MAX_EXPRESSION=4096
@@ -187,12 +190,32 @@ if [ "$MODE" = build ]; then
 	exit 0
 fi
 
+step "DNS: migrating records from $OLD_ORIGIN to $ORIGIN"
+while read -r label; do
+	[ -n "$label" ] || continue
+	name="$label.$ZONE"
+	existing="$("${CF[@]}" dns records list --name "$name" --type AAAA)"
+	ids="$(printf '%s' "$existing" | node -e '
+const records = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const oldOrigin = process.argv[1];
+for (const record of records) {
+	if (record.type !== "AAAA" || record.content !== oldOrigin) continue;
+	if (record.meta && record.meta.fallback_origin) continue;
+	process.stdout.write(record.id + " ");
+}
+' "$OLD_ORIGIN")"
+	for id in $ids; do
+		"${CF[@]}" dns records delete --force "$id" >/dev/null 2>&1 || true
+	done
+done <<<"$labels"
+echo "  done"
+
 step "DNS: $count records, AAAA -> $ORIGIN (proxied)"
 while read -r label; do
 	[ -n "$label" ] || continue
 	name="$label.$ZONE"
 	existing="$("${CF[@]}" dns records list --name "$name" --type AAAA)"
-	if printf '%s' "$existing" | grep -q '"content"'; then
+	if printf '%s' "$existing" | grep -q "\"content\": \"$ORIGIN\""; then
 		printf '  %-24s present\n' "$name"
 		continue
 	fi

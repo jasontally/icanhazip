@@ -177,7 +177,7 @@ test("xff reports the chain a proxy declared, empty when there is none", async (
 
 test("warp and gateway are gone, because a Snippet cannot read them", () => {
 	// Cloudflare knows both, and reports both at /cdn-cgi/trace, but a
-	// Snippet's fetch() is an origin request and this origin is 100::1 with
+	// Snippet's fetch() is an origin request and this origin is 100::42 with
 	// nothing behind it. The hosts were removed rather than left answering
 	// empty, because a name that always returns nothing is worse than no name.
 	// The whoami page links the trace, which is where a browser can read them.

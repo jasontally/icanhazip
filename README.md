@@ -350,7 +350,7 @@ gateway=off
 ```
 
 A Snippet cannot read that. `fetch()` inside a Snippet is an origin request, and
-this zone's origin is `100::1` with nothing behind it, so the subrequest finds no
+this zone's origin is `100::42` with nothing behind it, so the subrequest finds no
 trace. Cloudflare serves `/cdn-cgi/` to a browser before any Snippet runs, but
 that ordering is exactly what a subrequest cannot exploit.
 
@@ -734,7 +734,7 @@ neither place needs a flag. `MINIFY` still overrides it.
 Snippets run before the origin, and this Snippet never calls `fetch()` for a
 plain value, so no origin is contacted. Each host still needs a proxied record,
 because Snippets only run on requests that reach the Cloudflare edge. Every
-record is an AAAA to `100::1`, from the RFC 6666 IPv6 discard prefix, which is
+record is an AAAA to `100::42`, from the RFC 6666 IPv6 discard prefix, which is
 never routable.
 
 ### Known ceiling
