@@ -221,6 +221,7 @@ for (const record of records) {
 	const label = name.slice(0, name.length - suffix.length);
 	if (label.length === 0 || label.includes(".")) continue;
 	if (keep.has(label)) continue;
+	if (record.meta && record.meta.fallback_origin) continue;
 	process.stdout.write(`${record.id} ${name}\n`);
 }
 ' "$ZONE" "$ORIGIN" "$current")"
