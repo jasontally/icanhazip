@@ -287,9 +287,9 @@ const agentAnswer = (pathname, host) => {
 // JSON, so one map is one hostname and no third party sees the visit.
 // SRI pins the exact bytes: a tampered copy fails to load rather than runs.
 const TILES = "https://tiles.jasontally.com";
-const MAP_LIBRARIES = `<link rel="stylesheet" href="${TILES}/vendor/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="">
-<script defer src="${TILES}/vendor/maplibre-gl.js" integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin=""></script>
-<script defer src="${TILES}/vendor/pmtiles.js" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0+JGZ5H+3mfzVIp6zsQNkTsfGJot93" crossorigin=""></script>`;
+const MAP_LIBRARIES = `<link rel="stylesheet" href="${TILES}/vendor/maplibre-gl.css?v=1" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="">
+<script defer src="${TILES}/vendor/maplibre-gl.js?v=1" integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin=""></script>
+<script defer src="${TILES}/vendor/pmtiles.js?v=1" integrity="sha384-QfbOCebHNw8pQiPAOd2IFee2v2A5VYZxBk0+JGZ5H+3mfzVIp6zsQNkTsfGJot93" crossorigin=""></script>`;
 
 // One map, built the same way on both pages that carry one. The style JSON
 // holds the glyph URL, so tiles, labels and code all come from
@@ -300,8 +300,8 @@ const MAP_SCRIPT = (lat, lon, zoom, interactive = true) => `<script>
     // The page CSS already follows the visitor's colour scheme, so the map
     // does too. Both styles are the same map with different paint.
     var style = window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "${TILES}/styles/dark.json"
-      : "${TILES}/styles/bright.json";
+      ? "${TILES}/styles/dark.json?v=1"
+      : "${TILES}/styles/bright.json?v=1";
     try {
       var protocol = new pmtiles.Protocol();
       maplibregl.addProtocol("pmtiles", protocol.tile);
